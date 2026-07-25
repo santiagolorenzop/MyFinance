@@ -1,0 +1,25 @@
+.app-shell {
+  min-height: 100dvh;
+  padding-top: var(--safe-top);
+  padding-right: var(--safe-right);
+  padding-bottom: var(--safe-bottom);
+  padding-left: var(--safe-left);
+}
+
+.app-header {
+  padding-left: max(var(--space-4), var(--safe-left));
+  padding-right: max(var(--space-4), var(--safe-right));
+}
+
+.app-main {
+  padding-left: max(var(--space-4), var(--safe-left));
+  padding-right: max(var(--space-4), var(--safe-right));
+  padding-bottom: max(var(--space-5), var(--safe-bottom));
+}
+
+.drawer-panel {
+  padding-top: max(var(--space-5), var(--safe-top));
+  padding-bottom: max(var(--space-5), var(--safe-bottom));
+  padding-left: max(var(--space-4), var(--safe-left));
+  padding-right: var(--space-4);
+}
