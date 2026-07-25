@@ -3,15 +3,29 @@ import { Link } from 'react-router-dom'
 import { AppShell } from '@/components/ui/AppShell'
 import { t } from '@/i18n'
 import { fromMinorUnits } from '@/services/money'
-import { buildBalancesView } from '@/services/accountBalance'
+import {
+  buildBalancesView,
+  buildReportingNetWorth,
+} from '@/services/accountBalance'
+import { formatExchangeRateAsOf } from '@/services/exchangeRate'
 import { listAccounts } from '@/repositories/accountsRepository'
 import { listCurrencies } from '@/repositories/currenciesRepository'
+import { listExchangeRates } from '@/repositories/exchangeRatesRepository'
+import { getSettings } from '@/repositories/settingsRepository'
 import { listAllTransactions } from '@/repositories/transactionsRepository'
 import { listTreatments } from '@/repositories/treatmentsRepository'
-import type { Account, Currency, Transaction, Treatment } from '@/domain/types'
+import type {
+  Account,
+  Currency,
+  ExchangeRate,
+  Transaction,
+  Treatment,
+  UserSettings,
+} from '@/domain/types'
 
 /**
- * Balances list — amounts derived via accountBalanceService from the ledger.
+ * Balances list — native per-account amounts, plus approximate USD net worth
+ * from the current cached exchange rate (display only).
  */
 export function BalancesScreen() {
   const [loading, setLoading] = useState(true)
@@ -20,22 +34,35 @@ export function BalancesScreen() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [treatments, setTreatments] = useState<Treatment[]>([])
   const [currencies, setCurrencies] = useState<Currency[]>([])
+  const [rates, setRates] = useState<ExchangeRate[]>([])
+  const [settings, setSettings] = useState<UserSettings | null>(null)
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
       try {
-        const [nextAccounts, nextTx, nextTreatments, nextCurrencies] = await Promise.all([
+        const [
+          nextAccounts,
+          nextTx,
+          nextTreatments,
+          nextCurrencies,
+          nextRates,
+          nextSettings,
+        ] = await Promise.all([
           listAccounts(true),
           listAllTransactions(),
           listTreatments(),
           listCurrencies(),
+          listExchangeRates(),
+          getSettings(),
         ])
         if (cancelled) return
         setAccounts(nextAccounts)
         setTransactions(nextTx)
         setTreatments(nextTreatments)
         setCurrencies(nextCurrencies)
+        setRates(nextRates)
+        setSettings(nextSettings ?? null)
       } catch {
         if (!cancelled) setError(t('errors.generic'))
       } finally {
@@ -57,6 +84,24 @@ export function BalancesScreen() {
     () => buildBalancesView(accounts, transactions, treatments),
     [accounts, transactions, treatments],
   )
+
+  const baseCurrency =
+    settings?.reportingCurrency ?? settings?.baseCurrency ?? 'USD'
+  const baseDp = currencyByCode[baseCurrency]?.decimalPlaces ?? 2
+
+  const netWorth = useMemo(
+    () =>
+      buildReportingNetWorth({
+        totalsByCurrency: view.totalsByCurrency,
+        baseCurrencyCode: baseCurrency,
+        rates,
+        currencies: currencyByCode,
+      }),
+    [view.totalsByCurrency, baseCurrency, rates, currencyByCode],
+  )
+
+  const rateAsOf =
+    netWorth.parts.find((part) => part.rateAsOf != null)?.rateAsOf ?? null
 
   if (loading) {
     return (
@@ -84,16 +129,46 @@ export function BalancesScreen() {
         ) : (
           <>
             <div className="stack">
-              <p className="field__label">{t('balances.totalsByCurrency')}</p>
-              {Object.keys(view.totalsByCurrency).length === 0 ? (
-                <p className="screen__note">{t('balances.empty')}</p>
+              <p className="field__label">{t('balances.netWorth')}</p>
+              {netWorth.totalBaseMinor != null ? (
+                <p className="stat-cell__value">
+                  {fromMinorUnits(netWorth.totalBaseMinor, baseDp)} {baseCurrency}
+                </p>
               ) : (
-                Object.entries(view.totalsByCurrency).map(([code, minor]) => (
-                  <p key={code} className="stat-cell__value">
-                    {fromMinorUnits(minor, currencyByCode[code]?.decimalPlaces ?? 2)} {code}
-                  </p>
-                ))
+                <p className="screen__note">{t('balances.netWorthUnavailable')}</p>
               )}
+              <p className="screen__note">{t('balances.netWorthHint')}</p>
+
+              {netWorth.parts.map((part) => {
+                const dp = currencyByCode[part.currencyCode]?.decimalPlaces ?? 2
+                const native = `${fromMinorUnits(part.nativeMinor, dp)} ${part.currencyCode}`
+                if (part.currencyCode === baseCurrency) {
+                  return (
+                    <p key={part.currencyCode} className="screen__note">
+                      {native}
+                    </p>
+                  )
+                }
+                const approx =
+                  part.baseMinor != null
+                    ? `≈ ${fromMinorUnits(part.baseMinor, baseDp)} ${baseCurrency}`
+                    : '≈ —'
+                return (
+                  <p key={part.currencyCode} className="screen__note">
+                    {native} ({approx})
+                  </p>
+                )
+              })}
+
+              {rateAsOf ? (
+                <p className="screen__note">
+                  {t('balances.rateAsOf')} {formatExchangeRateAsOf(rateAsOf)}.
+                </p>
+              ) : null}
+
+              <Link className="secondary-button" to="/settings/currencies">
+                {t('balances.manageRates')}
+              </Link>
             </div>
 
             <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>

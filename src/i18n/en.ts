@@ -158,6 +158,13 @@ export const en = {
     heading: 'Balances',
     empty: 'Add your first account before recording a transaction.',
     totalsByCurrency: 'Totals by currency',
+    netWorth: 'Total (reporting currency)',
+    netWorthHint:
+      'Approximate total using the current exchange rate. Each account balance stays in its own currency.',
+    netWorthUnavailable:
+      'Cannot show a combined total — add or refresh an exchange rate in Settings → Currencies.',
+    rateAsOf: 'Using rate from',
+    manageRates: 'Exchange rates',
     accountDetail: 'Account detail',
     recentMovements: 'Recent movements',
     includedInTotal: 'Included in totals',

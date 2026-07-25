@@ -3,6 +3,7 @@
 ## Architecture summary
 
 - **Account balances** remain native-currency only (`initialBalanceMinor` + `accountAmountMinor` movements). Exchange rate changes never rewrite balances.
+- **Balances screen** also shows an approximate **reporting-currency net worth** by converting native currency totals with the **current cached** rate (display only). Per-account rows stay native.
 - **Reporting / budgets / stats / reports** continue to use each transaction’s frozen `baseCurrencyAmountMinor`.
 - **Market rates** are cached in IndexedDB table `exchangeRates` (schema v2, additive). Rate meaning: **1 base = N quote** (e.g. USD/COP = 4050).
 - On save, foreign-currency entries can pass `baseQuoteRate` into `resolveConversion`, which derives `baseCurrencyAmountMinor` and stores `exchangeRate`, `exchangeRateDate`, and `exchangeRateSource` on the transaction forever.
