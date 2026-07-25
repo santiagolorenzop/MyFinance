@@ -46,6 +46,18 @@ describe('accountsRepository integrity', () => {
     await expect(deleteAccount(account.id)).rejects.toBeInstanceOf(IntegrityError)
   })
 
+  it('creates a credit card with a negative opening balance', async () => {
+    const account = await createAccount({
+      name: 'Visa',
+      type: 'credit_card',
+      currencyCode: 'USD',
+      initialBalanceMinor: -30_000,
+    })
+    expect(account.initialBalanceMinor).toBe(-30_000)
+    const stored = await db.accounts.get(account.id)
+    expect(stored?.initialBalanceMinor).toBe(-30_000)
+  })
+
   it('persists safe field edits', async () => {
     const account = await createAccount({
       name: 'Cash',

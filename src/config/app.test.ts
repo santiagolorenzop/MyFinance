@@ -5,7 +5,7 @@ import { MOTION } from '@/config/motion'
 describe('app config', () => {
   it('exposes replaceable app name and phase-relevant constants', () => {
     expect(APP_NAME).toBe('MyFinance')
-    expect(SCHEMA_VERSION).toBe(1)
+    expect(SCHEMA_VERSION).toBe(2)
     expect(UNDO_TIMEOUT_MS).toBe(5000)
     expect(MOTION.fast).toBe(150)
     expect(MOTION.slow).toBe(250)

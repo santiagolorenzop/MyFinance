@@ -3,7 +3,8 @@ export const APP_NAME = 'MyFinance'
 
 export const APP_ID = 'myfinance'
 export const DB_NAME = 'myfinance'
-export const SCHEMA_VERSION = 1
+/** IndexedDB / backup schema version. Bump only with additive Dexie upgrades. */
+export const SCHEMA_VERSION = 2
 
 export const THEME_COLOR = '#1c1c1e'
 export const BACKGROUND_COLOR = '#f5f5f7'

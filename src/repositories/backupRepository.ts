@@ -15,6 +15,7 @@ export async function dumpAllTables(): Promise<BackupPayload> {
     budgetAllocations,
     periodReports,
     titleSuggestions,
+    exchangeRates,
   ] = await Promise.all([
     db.settings.toArray(),
     db.currencies.toArray(),
@@ -27,6 +28,7 @@ export async function dumpAllTables(): Promise<BackupPayload> {
     db.budgetAllocations.toArray(),
     db.periodReports.toArray(),
     db.titleSuggestions.toArray(),
+    db.exchangeRates.toArray(),
   ])
 
   return {
@@ -41,6 +43,7 @@ export async function dumpAllTables(): Promise<BackupPayload> {
     budgetAllocations,
     periodReports,
     titleSuggestions,
+    exchangeRates,
   }
 }
 
@@ -57,6 +60,7 @@ async function clearTablesInTransaction(): Promise<void> {
     db.budgetAllocations.clear(),
     db.periodReports.clear(),
     db.titleSuggestions.clear(),
+    db.exchangeRates.clear(),
   ])
 }
 
@@ -80,6 +84,9 @@ async function putPayloadInTransaction(payload: BackupPayload): Promise<void> {
       : Promise.resolve(),
     payload.titleSuggestions.length
       ? db.titleSuggestions.bulkPut(payload.titleSuggestions)
+      : Promise.resolve(),
+    payload.exchangeRates.length
+      ? db.exchangeRates.bulkPut(payload.exchangeRates)
       : Promise.resolve(),
   ])
 }

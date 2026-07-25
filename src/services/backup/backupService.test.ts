@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { db, ensureSystemData } from '@/db'
 import { createAccount } from '@/repositories/accountsRepository'
 import { createCategory } from '@/repositories/categoriesRepository'
+import { putExchangeRate } from '@/repositories/exchangeRatesRepository'
 import {
   createBackupEnvelope,
   importBackupPayload,
@@ -35,6 +36,13 @@ describe('backupService', () => {
       isDefault: true,
     })
     await createCategory({ name: 'Food', kind: 'expense' })
+    await putExchangeRate({
+      baseCurrencyCode: 'USD',
+      quoteCurrencyCode: 'COP',
+      rate: '4050',
+      asOf: '2026-07-24T12:00:00.000Z',
+      source: 'api',
+    })
     const settings = await db.settings.toCollection().first()
     const treatmentId = settings?.defaultTreatmentId
     if (!treatmentId) throw new Error('missing treatment')
@@ -46,6 +54,9 @@ describe('backupService', () => {
         originalAmountMinor: 350,
         date: '2026-07-20',
         treatmentId,
+        exchangeRate: '4050',
+        exchangeRateSource: 'api',
+        exchangeRateDate: '2026-07-24',
       }),
     )
 
@@ -68,6 +79,10 @@ describe('backupService', () => {
     expect(imported.ok).toBe(true)
     expect(await db.transactions.count()).toBe(1)
     expect((await db.accounts.toArray()).some((row) => row.name === 'Cash')).toBe(true)
+    expect(await db.exchangeRates.count()).toBe(1)
+    const restoredTx = await db.transactions.toCollection().first()
+    expect(restoredTx?.exchangeRate).toBe('4050')
+    expect(restoredTx?.exchangeRateDate).toBe('2026-07-24')
   })
 
   it('merges accounts without wiping unrelated rows', async () => {

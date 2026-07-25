@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { AppShell } from '@/components/ui/AppShell'
 import { t } from '@/i18n'
 import { fromMinorUnits, tryParsePositiveAmount } from '@/services/money'
+import { formatExchangeRateAsOf } from '@/services/exchangeRate'
 import {
   deleteMovementFlow,
   duplicateMoneyEntryFlow,
@@ -62,6 +63,7 @@ export function TransactionDetailScreen() {
   const [treatmentId, setTreatmentId] = useState('')
   const [notes, setNotes] = useState('')
   const [currencyCode, setCurrencyCode] = useState('')
+  const [fxRate, setFxRate] = useState('')
 
   function applyTransactionToForm(
     tx: Transaction,
@@ -82,6 +84,7 @@ export function TransactionDetailScreen() {
     setTreatmentId(tx.treatmentId)
     setNotes(tx.notes ?? '')
     setCurrencyCode(tx.originalCurrencyCode)
+    setFxRate(tx.exchangeRate && tx.exchangeRate !== '1' ? tx.exchangeRate : '')
   }
 
   useEffect(() => {
@@ -176,6 +179,21 @@ export function TransactionDetailScreen() {
       }
     }
 
+    const foreignForBase =
+      currencyCode !== settings.baseCurrency
+        ? currencyCode
+        : selectedAccount.currencyCode !== settings.baseCurrency
+          ? selectedAccount.currencyCode
+          : null
+    const rateTrimmed = fxRate.trim()
+    const amountUnchanged =
+      originalAmountMinor === transaction.originalAmountMinor &&
+      currencyCode === transaction.originalCurrencyCode &&
+      selectedAccount.currencyCode === transaction.accountCurrencyCode &&
+      (accountAmountMinor == null
+        ? transaction.originalCurrencyCode === transaction.accountCurrencyCode
+        : accountAmountMinor === transaction.accountAmountMinor)
+
     setSaving(true)
     setError(null)
     const result = await updateMoneyEntryFlow(transaction.id, {
@@ -191,6 +209,17 @@ export function TransactionDetailScreen() {
       accountCurrencyCode: selectedAccount.currencyCode,
       baseCurrencyCode: settings.baseCurrency,
       accountAmountMinor,
+      exchangeRate: rateTrimmed || transaction.exchangeRate,
+      baseQuoteRate: foreignForBase && rateTrimmed ? rateTrimmed : null,
+      quoteCurrencyCode: foreignForBase,
+      exchangeRateDate: transaction.exchangeRateDate,
+      exchangeRateSource:
+        rateTrimmed && rateTrimmed !== transaction.exchangeRate
+          ? 'manual'
+          : transaction.exchangeRateSource,
+      baseCurrencyAmountMinor: amountUnchanged
+        ? transaction.baseCurrencyAmountMinor
+        : null,
       currencies: currencyMap,
       createdAt: transaction.createdAt,
       updatedAt: new Date().toISOString(),
@@ -263,6 +292,10 @@ export function TransactionDetailScreen() {
     transaction.originalAmountMinor,
     displayCurrency?.decimalPlaces ?? 2,
   )
+  const baseDp = currencyByCode[settings?.baseCurrency ?? 'USD']?.decimalPlaces ?? 2
+  const hasFrozenFx =
+    Boolean(transaction.exchangeRate && transaction.exchangeRate !== '1') ||
+    transaction.baseCurrencyAmountMinor != null
 
   return (
     <AppShell title={t('movements.detail')}>
@@ -276,6 +309,34 @@ export function TransactionDetailScreen() {
           <p className="screen__note">
             {transaction.date} · {accountById.get(transaction.accountId)?.name}
           </p>
+          {hasFrozenFx ? (
+            <div className="stack">
+              <p className="screen__note">
+                {t('movements.originalAmount')}: {amountLabel}{' '}
+                {transaction.originalCurrencyCode}
+              </p>
+              {transaction.exchangeRate && transaction.exchangeRate !== '1' ? (
+                <p className="screen__note">
+                  {t('movements.exchangeRateUsed')}: {transaction.exchangeRate}
+                  {transaction.exchangeRateDate
+                    ? ` · ${t('movements.exchangeRateDate')}: ${formatExchangeRateAsOf(
+                        transaction.exchangeRateDate,
+                      )}`
+                    : null}
+                  {transaction.exchangeRateSource
+                    ? ` · ${t('movements.exchangeRateSource')}: ${transaction.exchangeRateSource}`
+                    : null}
+                </p>
+              ) : null}
+              {transaction.baseCurrencyAmountMinor != null ? (
+                <p className="screen__note">
+                  {t('movements.reportingAmount')}:{' '}
+                  {fromMinorUnits(transaction.baseCurrencyAmountMinor, baseDp)}{' '}
+                  {settings?.baseCurrency ?? 'USD'}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         {error ? (
@@ -321,6 +382,22 @@ export function TransactionDetailScreen() {
                 onChange={(event) => setAmount(event.target.value)}
               />
             </label>
+            {fxRate ||
+            (transaction.originalCurrencyCode !==
+              (settings?.baseCurrency ?? 'USD')) ? (
+              <label className="field">
+                <span className="field__label">{t('settings.exchangeRateEdit')}</span>
+                <input
+                  className="field__control"
+                  inputMode="decimal"
+                  value={fxRate}
+                  onChange={(event) => setFxRate(event.target.value)}
+                />
+                <span className="screen__note">
+                  {t('movements.exchangeRateUsed')} — stored on this transaction
+                </span>
+              </label>
+            ) : null}
             <label className="field">
               <span className="field__label">{t('expense.date')}</span>
               <input

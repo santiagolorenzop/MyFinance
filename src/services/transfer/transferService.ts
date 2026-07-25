@@ -14,6 +14,8 @@ export interface TransferDraft {
   destinationAmountMinor: number
   destinationCurrencyCode: string
   exchangeRate?: string | null
+  exchangeRateDate?: string | null
+  exchangeRateSource?: string | null
   treatmentId: string
   entrySource?: Transaction['entrySource']
   createdAt: string
@@ -58,7 +60,10 @@ export function createTransferLegs(draft: TransferDraft): TransferLegs {
     accountCurrencyCode: draft.sourceCurrencyCode,
     baseCurrencyAmountMinor: null,
     exchangeRate: draft.exchangeRate ?? null,
-    exchangeRateSource: draft.exchangeRate ? 'manual' : null,
+    exchangeRateSource: draft.exchangeRate
+      ? (draft.exchangeRateSource ?? 'manual')
+      : null,
+    exchangeRateDate: draft.exchangeRateDate ?? null,
     destinationAccountId: draft.destinationAccountId,
     linkedTransferId: draft.transferId,
     linkedTransactionId: incomingId,
@@ -85,7 +90,10 @@ export function createTransferLegs(draft: TransferDraft): TransferLegs {
     accountCurrencyCode: draft.destinationCurrencyCode,
     baseCurrencyAmountMinor: null,
     exchangeRate: draft.exchangeRate ?? null,
-    exchangeRateSource: draft.exchangeRate ? 'manual' : null,
+    exchangeRateSource: draft.exchangeRate
+      ? (draft.exchangeRateSource ?? 'manual')
+      : null,
+    exchangeRateDate: draft.exchangeRateDate ?? null,
     destinationAccountId: null,
     linkedTransferId: draft.transferId,
     linkedTransactionId: outgoingId,

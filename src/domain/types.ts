@@ -7,6 +7,7 @@ import type {
   categorySchema,
   categorySnapshotSchema,
   currencySchema,
+  exchangeRateSchema,
   fundSchema,
   periodReportSchema,
   titleSuggestionSchema,
@@ -20,7 +21,15 @@ export type MoneyAmount = z.infer<typeof moneyAmountSchema>
 export type FinancialDate = string
 
 export type Currency = z.infer<typeof currencySchema>
+export type ExchangeRate = z.infer<typeof exchangeRateSchema>
 export type UserSettings = z.infer<typeof userSettingsSchema>
+
+/** Reporting currency for budgets/stats/reports (falls back to baseCurrency). */
+export function getReportingCurrency(
+  settings: Pick<UserSettings, 'baseCurrency' | 'reportingCurrency'>,
+): string {
+  return settings.reportingCurrency ?? settings.baseCurrency
+}
 export type Account = z.infer<typeof accountSchema>
 export type Category = z.infer<typeof categorySchema>
 export type Fund = z.infer<typeof fundSchema>

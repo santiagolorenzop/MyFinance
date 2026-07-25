@@ -4,7 +4,16 @@ import { AppShell } from '@/components/ui/AppShell'
 import { UndoToast } from '@/components/ui/UndoToast'
 import { UNDO_TIMEOUT_MS } from '@/config/app'
 import { t } from '@/i18n'
-import { tryParsePositiveAmount } from '@/services/money'
+import { fromMinorUnits, tryParsePositiveAmount } from '@/services/money'
+import {
+  exchangeRateFinancialDate,
+  formatExchangeRateAsOf,
+  getCachedRate,
+} from '@/services/exchangeRate'
+import {
+  previewBaseAmountMinor,
+  quoteCurrencyForBaseRate,
+} from '@/services/exchangeRate/moneyEntryFx'
 import { suggestFromMemory } from '@/services/suggestion'
 import { rankAccountsForPicker } from '@/services/account'
 import {
@@ -60,6 +69,10 @@ interface DraftState {
   date: string
   notes: string
   accountAmount: string
+  fxRate: string
+  fxRateAsOf: string | null
+  fxRateSource: string | null
+  fxOffline: boolean
   categoryTouched: boolean
   accountTouched: boolean
   entrySource: EntrySource
@@ -82,6 +95,10 @@ function emptyDraft(
     date: todayFinancialDate(),
     notes: '',
     accountAmount: '',
+    fxRate: '',
+    fxRateAsOf: null,
+    fxRateSource: null,
+    fxOffline: false,
     categoryTouched: false,
     accountTouched: false,
     entrySource: 'manual',
@@ -219,6 +236,38 @@ export function ExpenseEntryScreen() {
   const needsAccountAmount =
     Boolean(draft && selectedAccount) &&
     draft!.currencyCode !== selectedAccount!.currencyCode
+
+  const quoteForFx = useMemo(() => {
+    if (!draft || !settings || !selectedAccount) return null
+    return quoteCurrencyForBaseRate({
+      originalCurrencyCode: draft.currencyCode,
+      accountCurrencyCode: selectedAccount.currencyCode,
+      baseCurrencyCode: settings.baseCurrency,
+    })
+  }, [draft, settings, selectedAccount])
+
+  useEffect(() => {
+    if (!settings || !quoteForFx) return
+    let cancelled = false
+    void (async () => {
+      const cached = await getCachedRate(settings.baseCurrency, quoteForFx)
+      if (cancelled || !cached) return
+      setDraft((current) => {
+        if (!current) return current
+        if (current.fxRate && current.fxRateSource === 'manual') return current
+        return {
+          ...current,
+          fxRate: cached.rate,
+          fxRateAsOf: cached.asOf,
+          fxRateSource: cached.source === 'manual' ? 'manual' : 'cached',
+          fxOffline: typeof navigator !== 'undefined' && navigator.onLine === false,
+        }
+      })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [quoteForFx, settings])
 
   const rankedAccounts = useMemo(() => {
     if (!settings) return []
@@ -469,6 +518,13 @@ export function ExpenseEntryScreen() {
       }
     }
 
+    const quote = quoteCurrencyForBaseRate({
+      originalCurrencyCode: draft.currencyCode,
+      accountCurrencyCode: selectedAccount.currencyCode,
+      baseCurrencyCode: settings.baseCurrency,
+    })
+    const baseQuoteRate = quote && draft.fxRate.trim() ? draft.fxRate.trim() : null
+
     const now = new Date().toISOString()
     setSaving(true)
     setError(null)
@@ -486,6 +542,12 @@ export function ExpenseEntryScreen() {
         accountCurrencyCode: selectedAccount.currencyCode,
         baseCurrencyCode: settings.baseCurrency,
         accountAmountMinor,
+        baseQuoteRate,
+        quoteCurrencyCode: quote,
+        exchangeRateDate: draft.fxRateAsOf
+          ? exchangeRateFinancialDate(draft.fxRateAsOf)
+          : draft.date,
+        exchangeRateSource: draft.fxRateSource,
         currencies: currencyMap,
         entrySource: draft.entrySource,
         createdAt: now,
@@ -821,6 +883,76 @@ export function ExpenseEntryScreen() {
                   placeholder={selectedAccount?.currencyCode}
                 />
               </label>
+            ) : null}
+
+            {quoteForFx ? (
+              <div className="stack">
+                <label className="field">
+                  <span className="field__label">
+                    {t('settings.exchangeRateEdit')} ({settings.baseCurrency}/{quoteForFx})
+                  </span>
+                  <input
+                    className="field__control"
+                    inputMode="decimal"
+                    value={draft.fxRate}
+                    onChange={(event) =>
+                      patchDraft({
+                        fxRate: event.target.value,
+                        fxRateSource: 'manual',
+                      })
+                    }
+                  />
+                </label>
+                {draft.fxRateAsOf ? (
+                  <p className="screen__note">
+                    {t('settings.exchangeRateOfflineNote')}{' '}
+                    {formatExchangeRateAsOf(draft.fxRateAsOf)}
+                    {draft.fxOffline ? '.' : '.'}
+                  </p>
+                ) : null}
+                {(() => {
+                  const currencyMap: Record<string, Pick<Currency, 'code' | 'decimalPlaces'>> =
+                    {}
+                  for (const currency of currencies) {
+                    currencyMap[currency.code] = {
+                      code: currency.code,
+                      decimalPlaces: currency.decimalPlaces,
+                    }
+                  }
+                  const originalCurrency = currencyByCode[draft.currencyCode]
+                  const originalAmountMinor = tryParsePositiveAmount(
+                    draft.amount,
+                    originalCurrency?.decimalPlaces ?? 2,
+                  )
+                  if (originalAmountMinor == null || !selectedAccount) return null
+                  let accountAmountMinor: number | null = null
+                  if (needsAccountAmount) {
+                    accountAmountMinor = tryParsePositiveAmount(
+                      draft.accountAmount,
+                      currencyByCode[selectedAccount.currencyCode]?.decimalPlaces ?? 2,
+                    )
+                  }
+                  const baseMinor = previewBaseAmountMinor({
+                    originalAmountMinor,
+                    originalCurrencyCode: draft.currencyCode,
+                    accountCurrencyCode: selectedAccount.currencyCode,
+                    baseCurrencyCode: settings.baseCurrency,
+                    accountAmountMinor,
+                    baseQuoteRate: draft.fxRate.trim() || null,
+                    quoteCurrencyCode: quoteForFx,
+                    currencies: currencyMap,
+                  })
+                  if (baseMinor == null) return null
+                  const baseDp =
+                    currencyByCode[settings.baseCurrency]?.decimalPlaces ?? 2
+                  return (
+                    <p className="screen__note">
+                      {t('settings.exchangeRateConverted')}:{' '}
+                      {fromMinorUnits(baseMinor, baseDp)} {settings.baseCurrency}
+                    </p>
+                  )
+                })()}
+              </div>
             ) : null}
 
             <div className="stack">

@@ -215,3 +215,11 @@ Template for new entries:
 - **Alternatives considered:** Always create a same-day new version; allow overlapping open plans.
 - **Consequences:** Live stats use the updated allocations right away; closed/frozen period reports remain unchanged; historical cutovers still use versioned `effectiveFrom`/`effectiveTo`.
 - **Reversible:** yes
+
+## 2026-07-25 — Additive FX cache + frozen per-transaction rates
+
+- **Decision:** Schema v2 adds an `exchangeRates` IndexedDB table (no wipe). Market rates mean **1 base = N quote** (e.g. USD/COP = 4050). App init refreshes rates when online; offline uses last cache. Each transaction freezes `exchangeRate`, `exchangeRateDate`, `exchangeRateSource`, and `baseCurrencyAmountMinor` at save time. Account balances stay in native currency forever.
+- **Reason:** Support COP accounts and USD reporting without rewriting history when rates change.
+- **Alternatives considered:** Recompute base amounts from live rates; store rates only in localStorage.
+- **Consequences:** Budgets/stats/reports keep using stored `baseCurrencyAmountMinor`. `reportingCurrency` is optional and falls back to `baseCurrency`. Credit-card debt UX stores negative `initialBalanceMinor` via an explicit debt checkbox.
+- **Reversible:** yes (table can be ignored; transactions remain valid)

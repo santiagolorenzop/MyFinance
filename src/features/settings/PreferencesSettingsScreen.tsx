@@ -65,6 +65,7 @@ export function PreferencesSettingsScreen() {
     try {
       await updateSettings({
         baseCurrency,
+        reportingCurrency: baseCurrency,
         themePreference: theme,
         defaultAccountId: defaultAccountId || null,
         defaultFundId: defaultFundId || null,

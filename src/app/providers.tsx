@@ -4,6 +4,8 @@ import { SETTINGS_ROW_ID } from '@/config/app'
 import { db, ensureSystemData } from '@/db'
 import { t } from '@/i18n'
 import { migrateCategoryKinds } from '@/repositories/categoriesRepository'
+import { listCurrencies } from '@/repositories/currenciesRepository'
+import { refreshExchangeRates } from '@/services/exchangeRate'
 import { ensureMissingClosedPeriodSnapshots } from '@/services/report'
 import type { UserSettings } from '@/domain/types'
 
@@ -34,6 +36,24 @@ export function AppProviders({ children }: { children: ReactNode }) {
         if (cancelled) return
         await refreshSettings()
         if (!cancelled) setReady(true)
+
+        // Non-blocking FX refresh — never delays app readiness or blocks offline use.
+        void (async () => {
+          try {
+            const row = await db.settings.get(SETTINGS_ROW_ID)
+            const base = row?.baseCurrency ?? 'USD'
+            const currencies = await listCurrencies(true)
+            const quotes = currencies
+              .map((c) => c.code)
+              .filter((code) => code !== base)
+            await refreshExchangeRates({
+              baseCurrencyCode: base,
+              quoteCurrencyCodes: quotes.length > 0 ? quotes : ['COP'],
+            })
+          } catch (cause) {
+            console.error(cause)
+          }
+        })()
       } catch (cause) {
         console.error(cause)
         if (!cancelled) {

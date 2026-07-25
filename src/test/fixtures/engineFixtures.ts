@@ -140,6 +140,7 @@ export function makeExpense(
     baseCurrencyAmountMinor: amount,
     exchangeRate: null,
     exchangeRateSource: null,
+    exchangeRateDate: null,
     destinationAccountId: null,
     linkedTransferId: null,
     linkedTransactionId: null,

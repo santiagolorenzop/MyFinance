@@ -3,7 +3,16 @@ import { Link, useNavigate } from 'react-router-dom'
 import { AppShell } from '@/components/ui/AppShell'
 import { t } from '@/i18n'
 import { filterCategoriesByKind } from '@/services/category'
-import { tryParsePositiveAmount } from '@/services/money'
+import { fromMinorUnits, tryParsePositiveAmount } from '@/services/money'
+import {
+  exchangeRateFinancialDate,
+  formatExchangeRateAsOf,
+  getCachedRate,
+} from '@/services/exchangeRate'
+import {
+  previewBaseAmountMinor,
+  quoteCurrencyForBaseRate,
+} from '@/services/exchangeRate/moneyEntryFx'
 import { suggestFromMemory } from '@/services/suggestion'
 import { saveIncomeFlow } from '@/services/income'
 import { listAccounts } from '@/repositories/accountsRepository'
@@ -39,6 +48,9 @@ export function IncomeScreen() {
   const [date, setDate] = useState(todayFinancialDate())
   const [notes, setNotes] = useState('')
   const [accountAmount, setAccountAmount] = useState('')
+  const [fxRate, setFxRate] = useState('')
+  const [fxRateAsOf, setFxRateAsOf] = useState<string | null>(null)
+  const [fxRateSource, setFxRateSource] = useState<string | null>(null)
   const [showMore, setShowMore] = useState(false)
 
   useEffect(() => {
@@ -95,6 +107,30 @@ export function IncomeScreen() {
   const needsAccountAmount =
     Boolean(selectedAccount) && currencyCode !== selectedAccount!.currencyCode
 
+  const quoteForFx = useMemo(() => {
+    if (!settings || !selectedAccount) return null
+    return quoteCurrencyForBaseRate({
+      originalCurrencyCode: currencyCode,
+      accountCurrencyCode: selectedAccount.currencyCode,
+      baseCurrencyCode: settings.baseCurrency,
+    })
+  }, [settings, selectedAccount, currencyCode])
+
+  useEffect(() => {
+    if (!settings || !quoteForFx) return
+    let cancelled = false
+    void (async () => {
+      const cached = await getCachedRate(settings.baseCurrency, quoteForFx)
+      if (cancelled || !cached) return
+      setFxRate((current) => (fxRateSource === 'manual' && current ? current : cached.rate))
+      setFxRateAsOf(cached.asOf)
+      setFxRateSource((source) => source === 'manual' ? source : 'cached')
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [settings, quoteForFx, fxRateSource])
+
   async function onSave() {
     if (!settings || !selectedAccount || saving) return
     const originalAmountMinor = tryParsePositiveAmount(
@@ -127,6 +163,13 @@ export function IncomeScreen() {
       }
     }
 
+    const quote = quoteCurrencyForBaseRate({
+      originalCurrencyCode: currencyCode,
+      accountCurrencyCode: selectedAccount.currencyCode,
+      baseCurrencyCode: settings.baseCurrency,
+    })
+    const baseQuoteRate = quote && fxRate.trim() ? fxRate.trim() : null
+
     const now = new Date().toISOString()
     setSaving(true)
     setError(null)
@@ -142,6 +185,12 @@ export function IncomeScreen() {
       accountCurrencyCode: selectedAccount.currencyCode,
       baseCurrencyCode: settings.baseCurrency,
       accountAmountMinor,
+      baseQuoteRate,
+      quoteCurrencyCode: quote,
+      exchangeRateDate: fxRateAsOf
+        ? exchangeRateFinancialDate(fxRateAsOf)
+        : date,
+      exchangeRateSource: fxRateSource,
       currencies: currencyMap,
       createdAt: now,
       updatedAt: now,
@@ -291,6 +340,72 @@ export function IncomeScreen() {
               onChange={(event) => setAccountAmount(event.target.value)}
             />
           </label>
+        ) : null}
+
+        {quoteForFx && settings ? (
+          <div className="stack">
+            <label className="field">
+              <span className="field__label">
+                {t('settings.exchangeRateEdit')} ({settings.baseCurrency}/{quoteForFx})
+              </span>
+              <input
+                className="field__control"
+                inputMode="decimal"
+                value={fxRate}
+                onChange={(event) => {
+                  setFxRate(event.target.value)
+                  setFxRateSource('manual')
+                }}
+              />
+            </label>
+            {fxRateAsOf ? (
+              <p className="screen__note">
+                {t('settings.exchangeRateOfflineNote')} {formatExchangeRateAsOf(fxRateAsOf)}.
+              </p>
+            ) : null}
+            {(() => {
+              const originalAmountMinor = tryParsePositiveAmount(
+                amount,
+                amountCurrency?.decimalPlaces ?? 2,
+              )
+              if (originalAmountMinor == null || !selectedAccount) return null
+              const currencyMap: Record<string, Pick<Currency, 'code' | 'decimalPlaces'>> = {}
+              for (const currency of currencies) {
+                currencyMap[currency.code] = {
+                  code: currency.code,
+                  decimalPlaces: currency.decimalPlaces,
+                }
+              }
+              let accountAmountMinor: number | null = null
+              if (needsAccountAmount) {
+                accountAmountMinor = tryParsePositiveAmount(
+                  accountAmount,
+                  currencyByCode[selectedAccount.currencyCode]?.decimalPlaces ?? 2,
+                )
+              }
+              const baseMinor = previewBaseAmountMinor({
+                originalAmountMinor,
+                originalCurrencyCode: currencyCode,
+                accountCurrencyCode: selectedAccount.currencyCode,
+                baseCurrencyCode: settings.baseCurrency,
+                accountAmountMinor,
+                baseQuoteRate: fxRate.trim() || null,
+                quoteCurrencyCode: quoteForFx,
+                currencies: currencyMap,
+              })
+              if (baseMinor == null) return null
+              return (
+                <p className="screen__note">
+                  {t('settings.exchangeRateConverted')}:{' '}
+                  {fromMinorUnits(
+                    baseMinor,
+                    currencyByCode[settings.baseCurrency]?.decimalPlaces ?? 2,
+                  )}{' '}
+                  {settings.baseCurrency}
+                </p>
+              )
+            })()}
+          </div>
         ) : null}
 
         <button type="button" className="secondary-button" onClick={() => setShowMore((v) => !v)}>

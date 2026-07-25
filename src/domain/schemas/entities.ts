@@ -21,10 +21,27 @@ export const currencySchema = z.object({
   active: z.boolean(),
 })
 
+/** Cached market rate: 1 major unit of base = `rate` major units of quote. */
+export const exchangeRateSchema = z.object({
+  id: z.string().min(1),
+  baseCurrencyCode: z.string().min(1),
+  quoteCurrencyCode: z.string().min(1),
+  rate: z.string().min(1),
+  asOf: z.string().min(1),
+  source: z.enum(['api', 'manual', 'cached']),
+  updatedAt: z.string(),
+})
+
 export const userSettingsSchema = z.object({
   id: z.string().min(1),
   preferredLanguage: z.string().min(2),
+  /** Base / reporting currency for budgets, stats, and reports. */
   baseCurrency: z.string().min(1),
+  /**
+   * Optional reporting currency. When omitted, `baseCurrency` is used.
+   * Kept for forward compatibility; v1 treats both as the same value.
+   */
+  reportingCurrency: z.string().min(1).optional(),
   locale: z.string().min(2),
   financialPeriodStartDay: z.number().int().min(1).max(31),
   firstDayOfWeek: z.number().int().min(0).max(6),
@@ -120,6 +137,8 @@ export const transactionSchema = z.object({
   baseCurrencyAmountMinor: moneyMinorSchema.nullable(),
   exchangeRate: z.string().nullable(),
   exchangeRateSource: z.string().nullable(),
+  /** ISO timestamp or financial date for the rate frozen on this transaction. */
+  exchangeRateDate: z.string().nullable().default(null),
   destinationAccountId: idSchema.nullable(),
   linkedTransferId: idSchema.nullable(),
   linkedTransactionId: idSchema.nullable(),

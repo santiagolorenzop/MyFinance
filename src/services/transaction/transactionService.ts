@@ -20,6 +20,11 @@ export interface MoneyEntryDraft {
   baseCurrencyCode: string
   accountAmountMinor?: number | null
   exchangeRate?: string | null
+  /** 1 major base = N major quote (market rate for reporting). */
+  baseQuoteRate?: string | null
+  quoteCurrencyCode?: string | null
+  exchangeRateDate?: string | null
+  exchangeRateSource?: string | null
   baseCurrencyAmountMinor?: number | null
   currencies: Record<string, Pick<Currency, 'code' | 'decimalPlaces'>>
   entrySource?: Transaction['entrySource']
@@ -68,6 +73,8 @@ function createMoneyEntryTransaction(
       baseCurrencyCode: draft.baseCurrencyCode,
       accountAmountMinor: draft.accountAmountMinor,
       exchangeRate: draft.exchangeRate,
+      baseQuoteRate: draft.baseQuoteRate,
+      quoteCurrencyCode: draft.quoteCurrencyCode,
       baseCurrencyAmountMinor: draft.baseCurrencyAmountMinor,
       currencies: draft.currencies,
     })
@@ -79,6 +86,14 @@ function createMoneyEntryTransaction(
         preserveDraft: true,
       }
     }
+
+    const rateSource =
+      draft.exchangeRateSource ??
+      (conversion.exchangeRate
+        ? conversion.usedBaseQuoteRate
+          ? 'cached'
+          : 'manual'
+        : null)
 
     const transaction: Transaction = {
       id: draft.id ?? crypto.randomUUID(),
@@ -97,7 +112,8 @@ function createMoneyEntryTransaction(
       accountCurrencyCode: conversion.accountCurrencyCode,
       baseCurrencyAmountMinor: conversion.baseCurrencyAmountMinor,
       exchangeRate: conversion.exchangeRate,
-      exchangeRateSource: conversion.exchangeRate ? 'manual' : null,
+      exchangeRateSource: rateSource,
+      exchangeRateDate: draft.exchangeRateDate ?? null,
       destinationAccountId: null,
       linkedTransferId: null,
       linkedTransactionId: null,
@@ -131,7 +147,9 @@ export function createIncomeTransaction(
 
 /**
  * Rebuild an expense/income row from a draft while preserving id and createdAt.
- * Reuses the same conversion rules as create.
+ * Frozen FX fields on the existing row are reused unless the draft overrides them.
+ * When amount/currencies are unchanged, the stored baseCurrencyAmountMinor is kept
+ * so historical reports do not drift from rounding.
  */
 export function rebuildMoneyEntryTransaction(
   existing: Transaction,
@@ -144,12 +162,43 @@ export function rebuildMoneyEntryTransaction(
       preserveDraft: true,
     }
   }
+
+  const accountAmountUnchanged =
+    (draft.accountAmountMinor == null &&
+      existing.originalCurrencyCode === existing.accountCurrencyCode) ||
+    draft.accountAmountMinor === existing.accountAmountMinor
+
+  const moneyUnchanged =
+    draft.originalAmountMinor === existing.originalAmountMinor &&
+    draft.originalCurrencyCode === existing.originalCurrencyCode &&
+    draft.accountCurrencyCode === existing.accountCurrencyCode &&
+    accountAmountUnchanged
+
+  const foreignForBase =
+    draft.originalCurrencyCode !== draft.baseCurrencyCode
+      ? draft.originalCurrencyCode
+      : draft.accountCurrencyCode !== draft.baseCurrencyCode
+        ? draft.accountCurrencyCode
+        : null
+
   const result = createMoneyEntryTransaction(
     {
       ...draft,
       id: existing.id,
       createdAt: existing.createdAt,
       updatedAt: draft.updatedAt,
+      exchangeRate: draft.exchangeRate ?? existing.exchangeRate,
+      exchangeRateDate: draft.exchangeRateDate ?? existing.exchangeRateDate,
+      exchangeRateSource: draft.exchangeRateSource ?? existing.exchangeRateSource,
+      baseQuoteRate:
+        draft.baseQuoteRate ??
+        (foreignForBase && existing.exchangeRate && existing.exchangeRate !== '1'
+          ? existing.exchangeRate
+          : draft.baseQuoteRate),
+      quoteCurrencyCode: draft.quoteCurrencyCode ?? foreignForBase,
+      baseCurrencyAmountMinor: moneyUnchanged
+        ? (draft.baseCurrencyAmountMinor ?? existing.baseCurrencyAmountMinor)
+        : draft.baseCurrencyAmountMinor,
     },
     existing.transactionType,
   )
@@ -178,7 +227,12 @@ export function draftFromTransactionForDuplicate(
     accountAmountMinor:
       tx.originalCurrencyCode === tx.accountCurrencyCode ? null : tx.accountAmountMinor,
     exchangeRate: tx.exchangeRate,
+    exchangeRateDate: tx.exchangeRateDate,
+    exchangeRateSource: tx.exchangeRateSource,
     baseCurrencyAmountMinor: tx.baseCurrencyAmountMinor,
+    baseQuoteRate:
+      tx.exchangeRate && tx.exchangeRate !== '1' ? tx.exchangeRate : null,
+    quoteCurrencyCode: tx.originalCurrencyCode,
     entrySource: 'manual',
     createdAt: nowIso,
     updatedAt: nowIso,

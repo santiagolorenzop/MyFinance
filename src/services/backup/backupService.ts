@@ -37,6 +37,7 @@ function buildCounts(payload: BackupPayload): BackupPreview['counts'] {
     budgetAllocations: payload.budgetAllocations.length,
     periodReports: payload.periodReports.length,
     titleSuggestions: payload.titleSuggestions.length,
+    exchangeRates: payload.exchangeRates.length,
   }
 }
 

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { DebtAmountField } from '@/components/forms/DebtAmountField'
+import { signedMinorFromDebtInput } from '@/services/account/debtAmount'
 import { ACCOUNT_TYPES } from '@/domain/enums'
 import type { AccountType } from '@/domain/enums'
 import type { Account, Currency } from '@/domain/types'
@@ -15,6 +17,10 @@ import {
   updateAccount,
 } from '@/repositories'
 
+function supportsDebtBalance(type: AccountType): boolean {
+  return type === 'credit_card' || type === 'loan'
+}
+
 export function AccountsSettingsScreen() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [currencies, setCurrencies] = useState<Currency[]>([])
@@ -24,6 +30,7 @@ export function AccountsSettingsScreen() {
   const [type, setType] = useState<AccountType>('checking')
   const [currencyCode, setCurrencyCode] = useState('USD')
   const [balance, setBalance] = useState('0')
+  const [isDebt, setIsDebt] = useState(false)
   const [includeInTotal, setIncludeInTotal] = useState(true)
 
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -31,6 +38,7 @@ export function AccountsSettingsScreen() {
   const [editType, setEditType] = useState<AccountType>('checking')
   const [editCurrencyCode, setEditCurrencyCode] = useState('USD')
   const [editBalance, setEditBalance] = useState('0')
+  const [editIsDebt, setEditIsDebt] = useState(false)
   const [editIncludeInTotal, setEditIncludeInTotal] = useState(true)
   const [editActive, setEditActive] = useState(true)
 
@@ -51,8 +59,10 @@ export function AccountsSettingsScreen() {
     setEditType(account.type)
     setEditCurrencyCode(account.currencyCode)
     const currency = currencies.find((c) => c.code === account.currencyCode)
-    setEditBalance(
-      fromMinorUnits(account.initialBalanceMinor, currency?.decimalPlaces ?? 2),
+    const absMinor = Math.abs(account.initialBalanceMinor)
+    setEditBalance(fromMinorUnits(absMinor, currency?.decimalPlaces ?? 2))
+    setEditIsDebt(
+      supportsDebtBalance(account.type) ? account.initialBalanceMinor < 0 : false,
     )
     setEditIncludeInTotal(account.includeInTotalNetBalance)
     setEditActive(account.isActive)
@@ -72,18 +82,22 @@ export function AccountsSettingsScreen() {
     }
     try {
       const currency = currencies.find((c) => c.code === currencyCode)
+      const debtMode = supportsDebtBalance(type)
       await createAccount({
         name,
         type,
         currencyCode,
-        initialBalanceMinor: parseUserAmountInput(
+        initialBalanceMinor: signedMinorFromDebtInput(
           balance || '0',
           currency?.decimalPlaces ?? 2,
+          debtMode && isDebt,
+          parseUserAmountInput,
         ),
         includeInTotalNetBalance: includeInTotal,
       })
       setName('')
       setBalance('0')
+      setIsDebt(false)
       setIncludeInTotal(true)
       await reload()
     } catch (cause) {
@@ -101,13 +115,16 @@ export function AccountsSettingsScreen() {
     }
     try {
       const currency = currencies.find((c) => c.code === editCurrencyCode)
+      const debtMode = supportsDebtBalance(editType)
       const result = await updateAccount(editingId, {
         name: editName,
         type: editType,
         currencyCode: editCurrencyCode,
-        initialBalanceMinor: parseUserAmountInput(
+        initialBalanceMinor: signedMinorFromDebtInput(
           editBalance || '0',
           currency?.decimalPlaces ?? 2,
+          debtMode && editIsDebt,
+          parseUserAmountInput,
         ),
         includeInTotalNetBalance: editIncludeInTotal,
         isActive: editActive,
@@ -214,16 +231,19 @@ export function AccountsSettingsScreen() {
                         </select>
                       </label>
                       <p className="screen__note">{t('settings.currencyChangeHint')}</p>
-                      <label className="field">
-                        <span className="field__label">{t('settings.initialBalance')}</span>
-                        <input
-                          className="field__control"
-                          inputMode="decimal"
-                          value={editBalance}
-                          onChange={(e) => setEditBalance(e.target.value)}
-                        />
-                      </label>
-                      <p className="screen__note">{t('settings.initialBalanceChangeHint')}</p>
+                      <DebtAmountField
+                        label={t('settings.initialBalance')}
+                        value={editBalance}
+                        onChange={setEditBalance}
+                        enableDebtMode={supportsDebtBalance(editType)}
+                        isDebt={editIsDebt}
+                        onDebtChange={setEditIsDebt}
+                        hint={
+                          supportsDebtBalance(editType)
+                            ? t('settings.creditDebtHint')
+                            : t('settings.initialBalanceChangeHint')
+                        }
+                      />
                       <label className="checkbox-row">
                         <input
                           type="checkbox"
@@ -317,7 +337,12 @@ export function AccountsSettingsScreen() {
           <select
             className="field__control"
             value={type}
-            onChange={(e) => setType(e.target.value as AccountType)}
+            onChange={(e) => {
+              const next = e.target.value as AccountType
+              setType(next)
+              if (supportsDebtBalance(next)) setIsDebt(true)
+              else setIsDebt(false)
+            }}
           >
             {ACCOUNT_TYPES.map((item) => (
               <option key={item} value={item}>
@@ -340,15 +365,17 @@ export function AccountsSettingsScreen() {
             ))}
           </select>
         </label>
-        <label className="field">
-          <span className="field__label">{t('settings.initialBalance')}</span>
-          <input
-            className="field__control"
-            inputMode="decimal"
-            value={balance}
-            onChange={(e) => setBalance(e.target.value)}
-          />
-        </label>
+        <DebtAmountField
+          label={t('settings.initialBalance')}
+          value={balance}
+          onChange={setBalance}
+          enableDebtMode={supportsDebtBalance(type)}
+          isDebt={isDebt}
+          onDebtChange={setIsDebt}
+          hint={
+            supportsDebtBalance(type) ? t('settings.creditDebtHint') : undefined
+          }
+        />
         <label className="checkbox-row">
           <input
             type="checkbox"

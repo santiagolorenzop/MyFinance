@@ -3,18 +3,25 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { AppShell } from '@/components/ui/AppShell'
 import { t } from '@/i18n'
 import { fromMinorUnits, tryParsePositiveAmount } from '@/services/money'
+import {
+  convertBetweenAccountCurrencies,
+  exchangeRateFinancialDate,
+  formatExchangeRateAsOf,
+} from '@/services/exchangeRate'
 import { saveTransferFlow, updateTransferFlow } from '@/services/transfer'
 import { getTransferLegsFromLedger } from '@/services/transfer/transferService'
 import { listAccounts } from '@/repositories/accountsRepository'
 import { getSettings } from '@/repositories/settingsRepository'
 import { listTreatments } from '@/repositories/treatmentsRepository'
 import { listCurrencies } from '@/repositories/currenciesRepository'
+import { listExchangeRates } from '@/repositories/exchangeRatesRepository'
 import { listTransactionsByTransferId } from '@/repositories/transactionsRepository'
-import type { Account, Currency } from '@/domain/types'
+import type { Account, Currency, ExchangeRate, UserSettings } from '@/domain/types'
 import { todayFinancialDate } from '@/utils/dates'
 
 /**
  * Dedicated transfer flow — builds both ledger legs via transferService.
+ * Cross-currency: destination auto-fills from cached FX; user may override.
  */
 export function TransferScreen() {
   const navigate = useNavigate()
@@ -26,12 +33,18 @@ export function TransferScreen() {
   const [error, setError] = useState<string | null>(null)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [currencies, setCurrencies] = useState<Currency[]>([])
+  const [rates, setRates] = useState<ExchangeRate[]>([])
+  const [settings, setSettings] = useState<UserSettings | null>(null)
   const [transferTreatmentId, setTransferTreatmentId] = useState('')
 
   const [sourceAccountId, setSourceAccountId] = useState('')
   const [destinationAccountId, setDestinationAccountId] = useState('')
   const [sourceAmount, setSourceAmount] = useState('')
   const [destinationAmount, setDestinationAmount] = useState('')
+  const [destinationManual, setDestinationManual] = useState(false)
+  const [fxRate, setFxRate] = useState('')
+  const [fxRateAsOf, setFxRateAsOf] = useState<string | null>(null)
+  const [fxRateSource, setFxRateSource] = useState<string | null>(null)
   const [title, setTitle] = useState('')
   const [date, setDate] = useState(todayFinancialDate())
   const [notes, setNotes] = useState('')
@@ -40,16 +53,20 @@ export function TransferScreen() {
     let cancelled = false
     void (async () => {
       try {
-        const [nextSettings, nextAccounts, nextTreatments, nextCurrencies] = await Promise.all([
-          getSettings(),
-          listAccounts(),
-          listTreatments(),
-          listCurrencies(true),
-        ])
+        const [nextSettings, nextAccounts, nextTreatments, nextCurrencies, nextRates] =
+          await Promise.all([
+            getSettings(),
+            listAccounts(),
+            listTreatments(),
+            listCurrencies(true),
+            listExchangeRates(),
+          ])
         if (cancelled) return
 
+        setSettings(nextSettings ?? null)
         setAccounts(nextAccounts)
         setCurrencies(nextCurrencies)
+        setRates(nextRates)
 
         const transferTreatment =
           nextTreatments.find((row) => row.behaviorKey === 'internal_transfer')?.id ?? ''
@@ -81,6 +98,10 @@ export function TransferScreen() {
             setDestinationAccountId(pair.incoming.accountId)
             setSourceAmount(fromMinorUnits(pair.outgoing.originalAmountMinor, sourceDp))
             setDestinationAmount(fromMinorUnits(pair.incoming.originalAmountMinor, destDp))
+            setDestinationManual(true)
+            setFxRate(pair.outgoing.exchangeRate ?? '')
+            setFxRateAsOf(pair.outgoing.exchangeRateDate)
+            setFxRateSource(pair.outgoing.exchangeRateSource)
             setTitle(pair.outgoing.title === 'Transfer' ? '' : pair.outgoing.title)
             setDate(pair.outgoing.date)
             setNotes(pair.outgoing.notes ?? '')
@@ -112,6 +133,85 @@ export function TransferScreen() {
   const crossCurrency =
     Boolean(sourceAccount && destinationAccount) &&
     sourceAccount!.currencyCode !== destinationAccount!.currencyCode
+  const baseCurrency = settings?.baseCurrency ?? 'USD'
+
+  // Auto-fill destination (+ rate from cache) when cross-currency and not overridden.
+  useEffect(() => {
+    if (!crossCurrency || !sourceAccount || !destinationAccount || destinationManual) return
+    const sourceDp = currencyByCode[sourceAccount.currencyCode]?.decimalPlaces ?? 2
+    const sourceMinor = tryParsePositiveAmount(sourceAmount, sourceDp)
+    if (sourceMinor == null) return
+
+    let workingRates = rates
+    if (fxRateSource === 'manual' && fxRate.trim()) {
+      const quote =
+        sourceAccount.currencyCode === baseCurrency
+          ? destinationAccount.currencyCode
+          : destinationAccount.currencyCode === baseCurrency
+            ? sourceAccount.currencyCode
+            : null
+      if (quote) {
+        const now = new Date().toISOString()
+        workingRates = [
+          {
+            id: `${baseCurrency}_${quote}`,
+            baseCurrencyCode: baseCurrency,
+            quoteCurrencyCode: quote,
+            rate: fxRate.trim(),
+            asOf: fxRateAsOf ?? now,
+            source: 'manual',
+            updatedAt: now,
+          },
+          ...rates.filter(
+            (row) =>
+              !(row.baseCurrencyCode === baseCurrency && row.quoteCurrencyCode === quote),
+          ),
+        ]
+      }
+    }
+
+    const converted = convertBetweenAccountCurrencies({
+      fromAmountMinor: sourceMinor,
+      fromCurrencyCode: sourceAccount.currencyCode,
+      toCurrencyCode: destinationAccount.currencyCode,
+      baseCurrencyCode: baseCurrency,
+      rates: workingRates,
+      currencies: currencyByCode,
+    })
+    if (!converted) {
+      if (fxRateSource !== 'manual') {
+        setFxRate('')
+        setFxRateAsOf(null)
+        setFxRateSource(null)
+      }
+      return
+    }
+
+    const destDp = currencyByCode[destinationAccount.currencyCode]?.decimalPlaces ?? 2
+    setDestinationAmount(fromMinorUnits(converted.toAmountMinor, destDp))
+    if (fxRateSource !== 'manual') {
+      setFxRate(converted.exchangeRate)
+      const cached = rates.find(
+        (row) =>
+          row.baseCurrencyCode === converted.baseCurrencyCode &&
+          row.quoteCurrencyCode === converted.quoteCurrencyCode,
+      )
+      setFxRateAsOf(cached?.asOf ?? null)
+      setFxRateSource(cached?.source ?? 'cached')
+    }
+  }, [
+    crossCurrency,
+    sourceAmount,
+    sourceAccount,
+    destinationAccount,
+    destinationManual,
+    rates,
+    currencyByCode,
+    baseCurrency,
+    fxRate,
+    fxRateSource,
+    fxRateAsOf,
+  ])
 
   async function onSave() {
     if (!sourceAccount || !destinationAccount || saving) return
@@ -134,6 +234,10 @@ export function TransferScreen() {
     }
 
     let destinationAmountMinor = sourceAmountMinor
+    let exchangeRate: string | null = null
+    let exchangeRateDate: string | null = null
+    let exchangeRateSource: string | null = null
+
     if (crossCurrency) {
       const parsed = tryParsePositiveAmount(
         destinationAmount,
@@ -144,6 +248,11 @@ export function TransferScreen() {
         return
       }
       destinationAmountMinor = parsed
+      exchangeRate = fxRate.trim() || null
+      exchangeRateDate = fxRateAsOf
+        ? exchangeRateFinancialDate(fxRateAsOf)
+        : date
+      exchangeRateSource = fxRateSource ?? (exchangeRate ? 'manual' : null)
     }
 
     const now = new Date().toISOString()
@@ -161,6 +270,9 @@ export function TransferScreen() {
       sourceCurrencyCode: sourceAccount.currencyCode,
       destinationAmountMinor,
       destinationCurrencyCode: destinationAccount.currencyCode,
+      exchangeRate,
+      exchangeRateDate,
+      exchangeRateSource,
       treatmentId: transferTreatmentId,
       createdAt: now,
       updatedAt: now,
@@ -219,7 +331,10 @@ export function TransferScreen() {
           <select
             className="field__control"
             value={sourceAccountId}
-            onChange={(event) => setSourceAccountId(event.target.value)}
+            onChange={(event) => {
+              setSourceAccountId(event.target.value)
+              setDestinationManual(false)
+            }}
           >
             {accounts.map((account) => (
               <option key={account.id} value={account.id}>
@@ -234,7 +349,10 @@ export function TransferScreen() {
           <select
             className="field__control"
             value={destinationAccountId}
-            onChange={(event) => setDestinationAccountId(event.target.value)}
+            onChange={(event) => {
+              setDestinationAccountId(event.target.value)
+              setDestinationManual(false)
+            }}
           >
             {accounts.map((account) => (
               <option key={account.id} value={account.id}>
@@ -250,23 +368,61 @@ export function TransferScreen() {
             className="field__control"
             inputMode="decimal"
             value={sourceAmount}
-            onChange={(event) => setSourceAmount(event.target.value)}
+            onChange={(event) => {
+              setSourceAmount(event.target.value)
+              setDestinationManual(false)
+            }}
             placeholder={sourceAccount?.currencyCode}
           />
         </label>
 
         {crossCurrency ? (
-          <label className="field">
-            <span className="field__label">{t('transfer.amountTo')}</span>
-            <span className="screen__note">{t('transfer.amountToHint')}</span>
-            <input
-              className="field__control"
-              inputMode="decimal"
-              value={destinationAmount}
-              onChange={(event) => setDestinationAmount(event.target.value)}
-              placeholder={destinationAccount?.currencyCode}
-            />
-          </label>
+          <>
+            <label className="field">
+              <span className="field__label">{t('transfer.amountTo')}</span>
+              <span className="screen__note">{t('transfer.amountToHint')}</span>
+              <input
+                className="field__control"
+                inputMode="decimal"
+                value={destinationAmount}
+                onChange={(event) => {
+                  setDestinationAmount(event.target.value)
+                  setDestinationManual(true)
+                }}
+                placeholder={destinationAccount?.currencyCode}
+              />
+            </label>
+            <label className="field">
+              <span className="field__label">{t('settings.exchangeRateEdit')}</span>
+              <input
+                className="field__control"
+                inputMode="decimal"
+                value={fxRate}
+                onChange={(event) => {
+                  setFxRate(event.target.value)
+                  setFxRateSource('manual')
+                  setDestinationManual(false)
+                }}
+                placeholder={
+                  sourceAccount && destinationAccount
+                    ? `${baseCurrency}/${
+                        sourceAccount.currencyCode === baseCurrency
+                          ? destinationAccount.currencyCode
+                          : sourceAccount.currencyCode
+                      }`
+                    : undefined
+                }
+              />
+            </label>
+            {!fxRate.trim() ? (
+              <p className="screen__note">{t('transfer.noRateHint')}</p>
+            ) : null}
+            {fxRateAsOf ? (
+              <p className="screen__note">
+                {t('settings.exchangeRateOfflineNote')} {formatExchangeRateAsOf(fxRateAsOf)}.
+              </p>
+            ) : null}
+          </>
         ) : null}
 
         <label className="field">

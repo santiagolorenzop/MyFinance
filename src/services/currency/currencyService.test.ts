@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  convertQuoteToBase,
   convertViaRate,
+  invertRateString,
   isMissingBaseConversion,
   resolveConversion,
 } from '@/services/currency'
@@ -18,6 +20,7 @@ describe('currencyService', () => {
     expect(result.accountAmountMinor).toBe(2800)
     expect(result.baseCurrencyAmountMinor).toBe(2800)
     expect(result.status).toBe('ok')
+    expect(result.usedBaseQuoteRate).toBe(false)
   })
 
   it('supports manual account amount conversion', () => {
@@ -49,6 +52,25 @@ describe('currencyService', () => {
     expect(result.baseCurrencyAmountMinor).toBe(199)
   })
 
+  it('converts COP native amounts to USD with market baseQuoteRate', () => {
+    // 100000 COP / 4050 ≈ 24.69 USD → 2469 minor
+    expect(convertQuoteToBase(100_000, 0, 2, '4050')).toBe(2469)
+    const result = resolveConversion({
+      originalAmountMinor: 100_000,
+      originalCurrencyCode: 'COP',
+      accountCurrencyCode: 'COP',
+      baseCurrencyCode: 'USD',
+      baseQuoteRate: '4050',
+      quoteCurrencyCode: 'COP',
+      currencies,
+    })
+    expect(result.status).toBe('ok')
+    expect(result.accountAmountMinor).toBe(100_000)
+    expect(result.baseCurrencyAmountMinor).toBe(2469)
+    expect(result.exchangeRate).toBe('4050')
+    expect(result.usedBaseQuoteRate).toBe(true)
+  })
+
   it('flags missing conversion instead of guessing', () => {
     const result = resolveConversion({
       originalAmountMinor: 1000,
@@ -76,5 +98,9 @@ describe('currencyService', () => {
       currencies,
     })
     expect(result.status).toBe('missing_account_amount')
+  })
+
+  it('inverts rates for quote→base conversion', () => {
+    expect(Number(invertRateString('4050'))).toBeCloseTo(1 / 4050, 10)
   })
 })

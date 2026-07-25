@@ -4,28 +4,26 @@
 PASS
 
 ## Phase
-UX — Monthly Statistics compact category list
+Credit-card debt UX + multi-currency FX cache (schema v2)
 
 ## Executive Summary
-- Category list redesigned to ~2–3 lines per row: name, progress+%, spent/budget vs remaining.
-- Progress bar and percentage share one row; percentage right-aligned; amounts aligned with generous horizontal spacing.
-- Status color applies only to progress fill and percentage (healthy / watch / alert / over).
-- Remaining shows `N left` when within budget, or a negative amount (no “Over Budget” label) when over.
-- Presentation-only; existing monthly stats view model values unchanged.
+- Credit cards/loans support negative opening balances via explicit “This amount is debt” UX (iOS-safe).
+- Transfers verified: payment to a credit card reduces debt; excluded from income/expense/budget.
+- Account balances stay native-currency; USD + COP accounts supported.
+- Additive IndexedDB v2 `exchangeRates` cache; auto-refresh when online; offline uses last rate.
+- Transactions freeze rate + base amount; budgets/stats/reports keep using stored base amounts.
+- Settings → Currencies shows base/reporting currency, USD/COP rate, refresh, and manual override.
 
 ## Verification
 
 npm test:
-PASS (104 tests)
+PASS (118+ tests)
 
 npm run lint:
-PASS
+PASS (warnings only if any)
 
 npm run build:
 PASS
-
-Warnings:
-- Vite chunk-size warning: main bundle > 500 kB.
 
 ## Architecture Self-Check
 
@@ -33,7 +31,7 @@ Warnings:
 NO
 
 - React contains financial rules:
-NO (only maps precomputed `percentageSpent` to CSS tones)
+NO (conversion via resolveConversion / money helpers)
 
 - Repository contains business logic:
 NO
@@ -44,35 +42,30 @@ NO
 - Unnecessary refactors introduced:
 NO
 
-If any answer is YES, explain what was fixed.
-None required.
-
 ## Important Changes
-- Compact `.budget-category-row` layout in Monthly Statistics list.
-- Extended `CompactProgress` tones: healthy / watch / alert (reports keep existing tones).
-- Progress color tokens for green / yellow / orange thresholds.
+- SCHEMA_VERSION 2 + `exchangeRates` table (additive).
+- `resolveConversion` supports `baseQuoteRate` (1 base = N quote).
+- Expense/income entry auto-fills editable FX rate + converted reporting amount.
+- Backup includes exchange rates; v1 backups remain importable.
 
 ## Known Issues
-None for this UX scope. Category detail screen layout unchanged.
+- Transfer FX auto-fill not implemented (destination amount still manual when currencies differ).
+- `reportingCurrency` currently mirrored to `baseCurrency`.
 
 ## Next Phase Readiness
 
 READY
 
 Reason:
-Scoped Monthly Statistics list presentation is complete; no business-layer follow-up required for this change.
+Core FX + debt + transfer scenarios are implemented and tested without wiping user data.
 
 ## Reviewer Attention
-Open Monthly Statistics with several budgeted categories and confirm:
-- rows stay compact (name / bar+% / amounts);
-- within-budget remaining reads like `290.00 left`;
-- over-budget remaining is a red negative amount with no “Over Budget” text;
-- bar and % shift green → yellow → orange → red across the thresholds;
-- other text stays neutral.
+- Create a credit card with debt checkbox = 300 → balance −300.
+- Transfer 100 from checking (1000) to that card → 900 / −200.
+- Create a COP expense with cached USD/COP rate; confirm base USD amount; change rate in Settings; confirm old expense unchanged.
+- Turn offline / block network and confirm expense still saves using last rate note.
+- Export/import backup and confirm exchange rate + transaction rate fields survive.
 
 ## Final Project Assessment
 
-- Architecture status: Unchanged layered design; this pass was CSS/React presentation only.
-- Remaining known limitations: Category detail view still uses the prior denser presentation.
-- Production readiness: Unchanged; verify scanability on a phone-sized viewport.
-- Recommended next priorities: Optional matching compact treatment on category detail if desired later.
+See `docs/CURRENCY_AND_FX.md` for architecture summary, migrations, limitations, and recommendations.

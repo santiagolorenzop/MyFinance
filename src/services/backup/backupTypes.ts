@@ -5,6 +5,7 @@ import {
   budgetPlanSchema,
   categorySchema,
   currencySchema,
+  exchangeRateSchema,
   fundSchema,
   periodReportSchema,
   titleSuggestionSchema,
@@ -25,6 +26,7 @@ export const BACKUP_TABLE_KEYS = [
   'budgetAllocations',
   'periodReports',
   'titleSuggestions',
+  'exchangeRates',
 ] as const
 
 export type BackupTableKey = (typeof BACKUP_TABLE_KEYS)[number]
@@ -41,6 +43,8 @@ export const backupPayloadSchema = z.object({
   budgetAllocations: z.array(budgetAllocationSchema),
   periodReports: z.array(periodReportSchema),
   titleSuggestions: z.array(titleSuggestionSchema),
+  /** Absent in v1 backups — treat as empty. */
+  exchangeRates: z.array(exchangeRateSchema).default([]),
 })
 
 export type BackupPayload = z.infer<typeof backupPayloadSchema>

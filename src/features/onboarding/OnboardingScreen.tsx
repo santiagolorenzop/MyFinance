@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppState } from '@/app/appState'
+import { DebtAmountField } from '@/components/forms/DebtAmountField'
+import { signedMinorFromDebtInput } from '@/services/account/debtAmount'
 import { ACCOUNT_TYPES } from '@/domain/enums'
 import type { AccountType } from '@/domain/enums'
 import { AppShell } from '@/components/ui/AppShell'
@@ -10,6 +12,10 @@ import {
   type AssignableCategoryKind,
 } from '@/services/category'
 import { parseUserAmountInput } from '@/services/money'
+
+function supportsDebtBalance(type: AccountType): boolean {
+  return type === 'credit_card' || type === 'loan'
+}
 import {
   createAccount,
   createBudgetPlan,
@@ -47,6 +53,7 @@ export function OnboardingScreen() {
   const [accountType, setAccountType] = useState<AccountType>('checking')
   const [accountCurrency, setAccountCurrency] = useState(settings?.baseCurrency ?? 'USD')
   const [accountBalance, setAccountBalance] = useState('0')
+  const [accountIsDebt, setAccountIsDebt] = useState(false)
   const [accountsAdded, setAccountsAdded] = useState(0)
 
   const [categoryName, setCategoryName] = useState('')
@@ -94,9 +101,12 @@ export function OnboardingScreen() {
     }
     const currency = currencies.find((c) => c.code === accountCurrency)
     try {
-      const minor = parseUserAmountInput(
+      const debtMode = supportsDebtBalance(accountType)
+      const minor = signedMinorFromDebtInput(
         accountBalance || '0',
         currency?.decimalPlaces ?? 2,
+        debtMode && accountIsDebt,
+        parseUserAmountInput,
       )
       await createAccount({
         name: accountName,
@@ -108,6 +118,7 @@ export function OnboardingScreen() {
       setAccountsAdded((n) => n + 1)
       setAccountName('')
       setAccountBalance('0')
+      setAccountIsDebt(false)
     } catch {
       setError(t('errors.invalidAmount'))
     }
@@ -330,7 +341,11 @@ export function OnboardingScreen() {
               <select
                 className="field__control"
                 value={accountType}
-                onChange={(e) => setAccountType(e.target.value as AccountType)}
+                onChange={(e) => {
+                  const next = e.target.value as AccountType
+                  setAccountType(next)
+                  setAccountIsDebt(supportsDebtBalance(next))
+                }}
               >
                 {ACCOUNT_TYPES.map((type) => (
                   <option key={type} value={type}>
@@ -353,15 +368,19 @@ export function OnboardingScreen() {
                 ))}
               </select>
             </label>
-            <label className="field">
-              <span className="field__label">{t('settings.initialBalance')}</span>
-              <input
-                className="field__control"
-                inputMode="decimal"
-                value={accountBalance}
-                onChange={(e) => setAccountBalance(e.target.value)}
-              />
-            </label>
+            <DebtAmountField
+              label={t('settings.initialBalance')}
+              value={accountBalance}
+              onChange={setAccountBalance}
+              enableDebtMode={supportsDebtBalance(accountType)}
+              isDebt={accountIsDebt}
+              onDebtChange={setAccountIsDebt}
+              hint={
+                supportsDebtBalance(accountType)
+                  ? t('settings.creditDebtHint')
+                  : undefined
+              }
+            />
             <div className="inline-actions">
               <button type="button" className="secondary-button" onClick={() => void addAccount()}>
                 {t('onboarding.addAnotherAccount')}
