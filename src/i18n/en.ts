@@ -223,7 +223,7 @@ export const en = {
     backupPreview: 'Import preview',
     backupMerge: 'Merge into this device',
     backupReplace: 'Replace all data',
-    backupReset: 'Reset all local data',
+    backupReset: 'Reset',
     backupResetConfirm:
       'Delete all local data on this device? System defaults will be restored and you will go through setup again.',
     backupReplaceConfirm:
