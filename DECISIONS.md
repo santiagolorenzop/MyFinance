@@ -207,3 +207,11 @@ Template for new entries:
 - **Alternatives considered:** Close only the immediately previous period; recompute closed totals from live budgets.
 - **Consequences:** Snapshots stay frozen after later budget/category edits; duplicates are avoided by the closedAt guard in `closePeriodReportFlow`.
 - **Reversible:** yes
+
+## 2026-07-24 — Mid-period budget edits update the open plan
+
+- **Decision:** Settings → Budgets primarily edits the current open plan via `replaceAllocations` (same-day amount/category changes apply immediately to Monthly Statistics). Creating another version is optional and starts **tomorrow** so it does not collide with an open plan that already starts today.
+- **Reason:** Users need to readjust category budgets within the current period without waiting for next month or hitting “version already starts on this date.”
+- **Alternatives considered:** Always create a same-day new version; allow overlapping open plans.
+- **Consequences:** Live stats use the updated allocations right away; closed/frozen period reports remain unchanged; historical cutovers still use versioned `effectiveFrom`/`effectiveTo`.
+- **Reversible:** yes

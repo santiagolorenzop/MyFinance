@@ -3,6 +3,7 @@ import { useAppState } from '@/app/appState'
 import type { BudgetAllocation, BudgetPlan, Category, Currency } from '@/domain/types'
 import { SettingsLayout } from '@/features/settings/SettingsLayout'
 import { t } from '@/i18n'
+import { filterCategoriesByKind } from '@/services/category'
 import { fromMinorUnits, parseUserAmountInput } from '@/services/money'
 import { sumAllocations } from '@/services/budget'
 import {
@@ -11,21 +12,44 @@ import {
   listBudgetPlans,
   listCategories,
   listCurrencies,
+  replaceAllocations,
 } from '@/repositories'
-import { todayFinancialDate } from '@/utils/dates'
+import { addCalendarDays, todayFinancialDate } from '@/utils/dates'
+
+function buildAmountDraft(
+  expenseCategories: Category[],
+  allocations: BudgetAllocation[],
+  decimalPlaces: number,
+): Record<string, string> {
+  const next: Record<string, string> = {}
+  for (const category of expenseCategories) {
+    const row = allocations.find((item) => item.categoryId === category.id)
+    next[category.id] =
+      row != null ? fromMinorUnits(row.allocatedAmountMinor, decimalPlaces) : ''
+  }
+  return next
+}
 
 export function BudgetsSettingsScreen() {
   const { settings } = useAppState()
   const [plans, setPlans] = useState<BudgetPlan[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [openPlan, setOpenPlan] = useState<BudgetPlan | null>(null)
   const [allocations, setAllocations] = useState<BudgetAllocation[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [currencies, setCurrencies] = useState<Currency[]>([])
   const [amounts, setAmounts] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
+  const [savedNote, setSavedNote] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
   const baseCurrency = settings?.baseCurrency ?? 'USD'
   const currency = currencies.find((c) => c.code === baseCurrency)
+  const decimalPlaces = currency?.decimalPlaces ?? 2
+
+  const expenseCategories = useMemo(
+    () => filterCategoriesByKind(categories, 'expense'),
+    [categories],
+  )
 
   const reload = useCallback(async () => {
     const [nextPlans, nextCategories, nextCurrencies] = await Promise.all([
@@ -36,37 +60,44 @@ export function BudgetsSettingsScreen() {
     setPlans(nextPlans)
     setCategories(nextCategories)
     setCurrencies(nextCurrencies)
-    const current = nextPlans[0]?.id ?? null
-    setSelectedId(current)
-    if (current) {
-      setAllocations(await listAllocations(current))
+
+    const currentOpen = nextPlans.find((plan) => plan.effectiveTo == null) ?? null
+    setOpenPlan(currentOpen)
+
+    if (currentOpen) {
+      const nextAllocations = await listAllocations(currentOpen.id)
+      setAllocations(nextAllocations)
+      setAmounts(
+        buildAmountDraft(
+          filterCategoriesByKind(nextCategories, 'expense'),
+          nextAllocations,
+          nextCurrencies.find((c) => c.code === (settings?.baseCurrency ?? 'USD'))
+            ?.decimalPlaces ?? 2,
+        ),
+      )
     } else {
       setAllocations([])
+      setAmounts({})
     }
-  }, [])
+  }, [settings?.baseCurrency])
 
   useEffect(() => {
     void reload()
   }, [reload])
 
-  useEffect(() => {
-    if (!selectedId) return
-    void listAllocations(selectedId).then(setAllocations)
-  }, [selectedId])
-
   const totalPreview = useMemo(() => {
     try {
-      const rows = categories.map((category) => ({
+      const rows = expenseCategories.map((category) => ({
         allocatedAmountMinor: parseUserAmountInput(
           amounts[category.id] || '0',
-          currency?.decimalPlaces ?? 2,
+          decimalPlaces,
         ),
       }))
       return sumAllocations(
         rows.map((row, index) => ({
           id: String(index),
           budgetPlanId: 'preview',
-          categoryId: categories[index]?.id ?? '',
+          categoryId: expenseCategories[index]?.id ?? '',
           allocatedAmountMinor: row.allocatedAmountMinor,
           sortOrder: index,
           createdAt: '',
@@ -76,37 +107,84 @@ export function BudgetsSettingsScreen() {
     } catch {
       return null
     }
-  }, [amounts, categories, currency?.decimalPlaces])
+  }, [amounts, expenseCategories, decimalPlaces])
 
-  async function onCreateVersion() {
+  function parseDraftAllocations() {
+    return expenseCategories
+      .map((category) => ({
+        categoryId: category.id,
+        allocatedAmountMinor: parseUserAmountInput(
+          amounts[category.id] || '0',
+          decimalPlaces,
+        ),
+      }))
+      .filter((row) => row.allocatedAmountMinor > 0)
+  }
+
+  async function onSaveCurrent() {
     setError(null)
-    if (categories.length === 0) {
+    setSavedNote(null)
+    if (expenseCategories.length === 0) {
       setError(t('settings.noCategoriesForBudget'))
       return
     }
+    setSaving(true)
     try {
-      const nextAllocations = categories
-        .map((category) => ({
-          categoryId: category.id,
-          allocatedAmountMinor: parseUserAmountInput(
-            amounts[category.id] || '0',
-            currency?.decimalPlaces ?? 2,
-          ),
-        }))
-        .filter((row) => row.allocatedAmountMinor > 0)
-
-      await createBudgetPlan({
-        name: 'Monthly budget',
-        baseCurrencyCode: baseCurrency,
-        effectiveFrom: todayFinancialDate(),
-        allocations: nextAllocations,
-      })
-      setAmounts({})
+      const nextAllocations = parseDraftAllocations()
+      if (openPlan) {
+        await replaceAllocations(openPlan.id, nextAllocations)
+        setSavedNote(t('settings.budgetSaved'))
+      } else {
+        await createBudgetPlan({
+          name: 'Monthly budget',
+          baseCurrencyCode: baseCurrency,
+          effectiveFrom: todayFinancialDate(),
+          allocations: nextAllocations,
+        })
+        setSavedNote(t('settings.budgetCreated'))
+      }
       await reload()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('errors.generic'))
+    } finally {
+      setSaving(false)
     }
   }
+
+  /**
+   * Optional cutover: close today's open plan and start a new version tomorrow.
+   * Mid-period amount tweaks should use Save current budget instead.
+   */
+  async function onCreateVersionFromTomorrow() {
+    setError(null)
+    setSavedNote(null)
+    if (expenseCategories.length === 0) {
+      setError(t('settings.noCategoriesForBudget'))
+      return
+    }
+    if (!openPlan) {
+      setError(t('settings.budgetVersionNeedsCurrent'))
+      return
+    }
+    setSaving(true)
+    try {
+      const nextAllocations = parseDraftAllocations()
+      await createBudgetPlan({
+        name: 'Monthly budget',
+        baseCurrencyCode: baseCurrency,
+        effectiveFrom: addCalendarDays(todayFinancialDate(), 1),
+        allocations: nextAllocations,
+      })
+      setSavedNote(t('settings.budgetVersionCreated'))
+      await reload()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t('errors.generic'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const closedPlans = plans.filter((plan) => plan.effectiveTo != null)
 
   return (
     <SettingsLayout
@@ -114,64 +192,22 @@ export function BudgetsSettingsScreen() {
       heading={t('settings.budgets')}
       error={error}
     >
-      <div className="stack">
-        {plans.length === 0 ? (
-          <p className="screen__note">{t('settings.emptyList')}</p>
-        ) : (
-          plans.map((plan) => (
-            <button
-              key={plan.id}
-              type="button"
-              className="list-row"
-              style={{ width: '100%', textAlign: 'left' }}
-              onClick={() => setSelectedId(plan.id)}
-            >
-              <span>
-                <strong>{plan.name}</strong>
-                <div className="screen__note">
-                  {plan.effectiveFrom}
-                  {plan.effectiveTo ? ` → ${plan.effectiveTo}` : ' → open'}
-                </div>
-              </span>
-              {selectedId === plan.id ? <span aria-hidden="true">✓</span> : null}
-            </button>
-          ))
-        )}
-      </div>
-
-      {selectedId ? (
-        <div className="stack skeleton-block">
-          <p className="screen__subheading">{t('settings.allocations')}</p>
-          {allocations.length === 0 ? (
-            <p className="screen__note">{t('settings.emptyList')}</p>
-          ) : (
-            allocations.map((row) => {
-              const category = categories.find((c) => c.id === row.categoryId)
-              return (
-                <div key={row.id} className="list-row">
-                  <span>{category?.name ?? row.categoryId}</span>
-                  <span>
-                    {fromMinorUnits(row.allocatedAmountMinor, currency?.decimalPlaces ?? 2)}{' '}
-                    {baseCurrency}
-                  </span>
-                </div>
-              )
-            })
-          )}
-          <p className="screen__note">
-            {t('app.total')}:{' '}
-            {fromMinorUnits(sumAllocations(allocations), currency?.decimalPlaces ?? 2)}{' '}
-            {baseCurrency}
-          </p>
-        </div>
-      ) : null}
+      {openPlan ? (
+        <p className="screen__note">
+          {t('settings.currentBudget')}: {openPlan.effectiveFrom} → {t('settings.budgetOpen')}
+        </p>
+      ) : (
+        <p className="screen__note">{t('settings.noCurrentBudget')}</p>
+      )}
 
       <div className="stack skeleton-block">
-        <p className="screen__subheading">{t('settings.newBudgetVersion')}</p>
-        {categories.length === 0 ? (
+        <p className="screen__subheading">
+          {openPlan ? t('settings.editCurrentBudget') : t('settings.createBudget')}
+        </p>
+        {expenseCategories.length === 0 ? (
           <p className="screen__note">{t('settings.noCategoriesForBudget')}</p>
         ) : (
-          categories.map((category) => (
+          expenseCategories.map((category) => (
             <label key={category.id} className="field">
               <span className="field__label">{category.name}</span>
               <input
@@ -187,14 +223,61 @@ export function BudgetsSettingsScreen() {
         )}
         {totalPreview != null ? (
           <p className="screen__note">
-            {t('app.total')}: {fromMinorUnits(totalPreview, currency?.decimalPlaces ?? 2)}{' '}
-            {baseCurrency}
+            {t('app.total')}: {fromMinorUnits(totalPreview, decimalPlaces)} {baseCurrency}
           </p>
         ) : null}
-        <button type="button" className="primary-button" onClick={() => void onCreateVersion()}>
-          {t('settings.createBudget')}
+        <button
+          type="button"
+          className="primary-button"
+          disabled={saving}
+          onClick={() => void onSaveCurrent()}
+        >
+          {openPlan ? t('settings.saveCurrentBudget') : t('settings.createBudget')}
         </button>
+        {openPlan ? (
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={saving}
+            onClick={() => void onCreateVersionFromTomorrow()}
+          >
+            {t('settings.newBudgetVersionTomorrow')}
+          </button>
+        ) : null}
+        {savedNote ? (
+          <p className="screen__note" role="status">
+            {savedNote}
+          </p>
+        ) : null}
+        {openPlan ? (
+          <p className="screen__note">{t('settings.budgetEditHint')}</p>
+        ) : null}
       </div>
+
+      {closedPlans.length > 0 ? (
+        <div className="stack">
+          <p className="field__label">{t('settings.previousBudgetVersions')}</p>
+          {closedPlans.map((plan) => (
+            <div key={plan.id} className="list-row">
+              <span>
+                <strong>{plan.name}</strong>
+                <div className="screen__note">
+                  {plan.effectiveFrom} → {plan.effectiveTo}
+                </div>
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {openPlan && allocations.length > 0 ? (
+        <div className="stack">
+          <p className="screen__note">
+            {t('app.total')}: {fromMinorUnits(sumAllocations(allocations), decimalPlaces)}{' '}
+            {baseCurrency}
+          </p>
+        </div>
+      ) : null}
     </SettingsLayout>
   )
 }
