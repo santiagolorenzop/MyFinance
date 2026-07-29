@@ -53,6 +53,7 @@ Only treatments with `countsAsAccountMovement` affect balances. Soft-deleted row
 Sum expenses where:
 
 - `transactionType = expense`
+- `categoryId` is not null (“No category” expenses affect balances/history only)
 - treatment `countsTowardMonthlyBudget = true`
 - financial date inside the selected period
 - `baseCurrencyAmountMinor` is present

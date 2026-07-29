@@ -59,6 +59,7 @@ describe('FX architecture audit', () => {
       accountCurrencyCode: 'COP',
       baseCurrencyAmountMinor: 2_500,
       exchangeRate: '4000',
+      categoryId: 'cat-food',
       date: '2026-07-15',
     })
     const totalBefore = sumEligibleSpentMinor([tx], treatments, {

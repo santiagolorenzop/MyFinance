@@ -33,8 +33,8 @@ function matchLabel(field: string): string {
 }
 
 /**
- * Movements list — search/filter via pure movement + search services.
- * Tap-first actions only (gestures deferred).
+ * Movements list — search + compact account/category filters always visible.
+ * Type and date filters stay behind “More filters”.
  */
 export function MovementsScreen() {
   const [loading, setLoading] = useState(true)
@@ -46,7 +46,7 @@ export function MovementsScreen() {
   const [treatments, setTreatments] = useState<Treatment[]>([])
   const [currencies, setCurrencies] = useState<Currency[]>([])
   const [searchQuery, setSearchQuery] = useState('')
-  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
   const [filters, setFilters] = useState<MovementFilters>(EMPTY_MOVEMENT_FILTERS)
 
   useEffect(() => {
@@ -121,6 +121,9 @@ export function MovementsScreen() {
     })
   }
 
+  const hasMoreFilterValues =
+    filters.types.length > 0 || filters.dateFrom != null || filters.dateTo != null
+
   if (loading) {
     return (
       <AppShell title={t('movements.heading')}>
@@ -163,28 +166,84 @@ export function MovementsScreen() {
           />
         </label>
 
+        <div
+          className="inline-actions"
+          style={{ alignItems: 'stretch', flexWrap: 'wrap', gap: 'var(--space-2)' }}
+        >
+          <label className="field" style={{ flex: '1 1 140px', margin: 0 }}>
+            <span className="sr-only">{t('movements.account')}</span>
+            <select
+              className="field__control"
+              aria-label={t('movements.account')}
+              value={filters.accountIds[0] ?? ''}
+              onChange={(event) =>
+                setFilters((current) => ({
+                  ...current,
+                  accountIds: event.target.value ? [event.target.value] : [],
+                }))
+              }
+            >
+              <option value="">{t('movements.allAccounts')}</option>
+              {accounts
+                .filter((row) => row.archivedAt == null)
+                .map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+
+          <label className="field" style={{ flex: '1 1 140px', margin: 0 }}>
+            <span className="sr-only">{t('movements.category')}</span>
+            <select
+              className="field__control"
+              aria-label={t('movements.category')}
+              value={filters.categoryIds[0] ?? ''}
+              onChange={(event) =>
+                setFilters((current) => ({
+                  ...current,
+                  categoryIds: event.target.value ? [event.target.value] : [],
+                }))
+              }
+            >
+              <option value="">{t('movements.allCategories')}</option>
+              {categories
+                .filter((row) => row.archivedAt == null)
+                .map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+        </div>
+
         <div className="inline-actions">
           <button
             type="button"
             className="secondary-button"
-            aria-expanded={filtersOpen}
-            onClick={() => setFiltersOpen((value) => !value)}
+            aria-expanded={moreFiltersOpen}
+            onClick={() => setMoreFiltersOpen((value) => !value)}
           >
-            {filtersOpen ? t('movements.hideFilters') : t('movements.filters')}
-            {hasActiveFilters(filters) ? ' ·' : ''}
+            {moreFiltersOpen ? t('movements.hideMoreFilters') : t('movements.moreFilters')}
+            {hasMoreFilterValues ? ' ·' : ''}
           </button>
-          {hasActiveFilters(filters) ? (
+          {hasActiveFilters(filters) || searchQuery.trim() ? (
             <button
               type="button"
               className="secondary-button"
-              onClick={() => setFilters(EMPTY_MOVEMENT_FILTERS)}
+              onClick={() => {
+                setFilters(EMPTY_MOVEMENT_FILTERS)
+                setSearchQuery('')
+              }}
             >
               {t('movements.clearFilters')}
             </button>
           ) : null}
         </div>
 
-        {filtersOpen ? (
+        {moreFiltersOpen ? (
           <div className="stack skeleton-block">
             <p className="field__label">{t('movements.type')}</p>
             <div className="chip-row">
@@ -200,52 +259,6 @@ export function MovementsScreen() {
                 </button>
               ))}
             </div>
-
-            <label className="field">
-              <span className="field__label">{t('movements.account')}</span>
-              <select
-                className="field__control"
-                value={filters.accountIds[0] ?? ''}
-                onChange={(event) =>
-                  setFilters((current) => ({
-                    ...current,
-                    accountIds: event.target.value ? [event.target.value] : [],
-                  }))
-                }
-              >
-                <option value="">{t('app.clear')}</option>
-                {accounts
-                  .filter((row) => row.archivedAt == null)
-                  .map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="field__label">{t('movements.category')}</span>
-              <select
-                className="field__control"
-                value={filters.categoryIds[0] ?? ''}
-                onChange={(event) =>
-                  setFilters((current) => ({
-                    ...current,
-                    categoryIds: event.target.value ? [event.target.value] : [],
-                  }))
-                }
-              >
-                <option value="">{t('app.clear')}</option>
-                {categories
-                  .filter((row) => row.archivedAt == null)
-                  .map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
 
             <label className="field">
               <span className="field__label">{t('movements.dateFrom')}</span>

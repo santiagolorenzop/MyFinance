@@ -52,6 +52,8 @@ export function isBudgetEligibleExpense(
 ): boolean {
   if (tx.deletedAt != null) return false
   if (tx.transactionType !== 'expense') return false
+  // "No category" expenses affect balances/history but not Monthly Budget / stats.
+  if (tx.categoryId == null) return false
   const treatment = treatments.get(tx.treatmentId)
   if (!treatment?.countsTowardMonthlyBudget) return false
   if (tx.baseCurrencyAmountMinor == null) return false

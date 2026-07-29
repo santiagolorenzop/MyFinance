@@ -6,8 +6,10 @@ import {
   selectBudgetPlanForDate,
   sumEligibleSpentMinor,
 } from '@/services/budget'
+import { calculateAccountBalance } from '@/services/accountBalance'
 import { daysLeftInPeriod, getPeriodForDate } from '@/services/period'
 import {
+  makeAccount,
   makeAllocation,
   makeCategory,
   makeExpense,
@@ -32,13 +34,94 @@ describe('budgetService', () => {
       treatmentId: 'treat-monthly',
     })
 
-  it('includes Monthly Budget expenses in monthly spending', () => {
+  it('excludes No Category expenses from monthly spending but keeps them budget-ineligible only', () => {
     const spent = sumEligibleSpentMinor(
-      [monthlyExpense('e1', 2500, 'cat-food', '2026-07-18')],
+      [
+        makeExpense({
+          id: 'e-uncat',
+          title: 'Misc',
+          accountId: 'acc-1',
+          originalAmountMinor: 10_000,
+          categoryId: null,
+          date: '2026-07-18',
+          treatmentId: 'treat-monthly',
+        }),
+        monthlyExpense('e-food', 2500, 'cat-food', '2026-07-18'),
+      ],
       treatments,
       { period, today: '2026-07-20' },
     )
     expect(spent).toBe(2500)
+  })
+
+  it('keeps Monthly Remaining unchanged when only No Category expenses exist', () => {
+    const stats = calculatePeriodBudgetStats({
+      period,
+      daysLeft: daysLeftInPeriod(period, '2026-07-20'),
+      today: '2026-07-20',
+      transactions: [
+        makeExpense({
+          id: 'e-uncat',
+          title: 'No cat',
+          accountId: 'acc-1',
+          originalAmountMinor: 10_000,
+          categoryId: null,
+          date: '2026-07-18',
+          treatmentId: 'treat-monthly',
+        }),
+      ],
+      treatments,
+      categories: [food, transport],
+      budgetPlan: makePlan({
+        id: 'plan-1',
+        name: 'July',
+        effectiveFrom: '2026-07-01',
+      }),
+      allocations: [
+        makeAllocation({
+          id: 'a1',
+          budgetPlanId: 'plan-1',
+          categoryId: 'cat-food',
+          allocatedAmountMinor: 50_000,
+        }),
+        makeAllocation({
+          id: 'a2',
+          budgetPlanId: 'plan-1',
+          categoryId: 'cat-transport',
+          allocatedAmountMinor: 20_000,
+        }),
+      ],
+    })
+    expect(stats.totalBudgetMinor).toBe(70_000)
+    expect(stats.totalSpentMinor).toBe(0)
+    expect(stats.remainingMinor).toBe(70_000)
+  })
+
+  it('still reduces account balance for No Category expenses', () => {
+    const checking = makeAccount({
+      id: 'acc-1',
+      name: 'Checking',
+      currencyCode: 'USD',
+      initialBalanceMinor: 100_000,
+    })
+    const uncategorized = makeExpense({
+      id: 'e-uncat',
+      title: 'Misc',
+      accountId: 'acc-1',
+      originalAmountMinor: 10_000,
+      categoryId: null,
+      date: '2026-07-18',
+      treatmentId: 'treat-monthly',
+    })
+    expect(
+      calculateAccountBalance(checking, [uncategorized], treatments).balanceMinor,
+    ).toBe(90_000)
+    expect(
+      sumEligibleSpentMinor([uncategorized], treatments, {
+        period,
+        today: '2026-07-20',
+      }),
+    ).toBe(0)
   })
 
   it('excludes Excluded and First Month Extra expenses from monthly spending', () => {
