@@ -3,7 +3,11 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { AppShell } from '@/components/ui/AppShell'
 import { t } from '@/i18n'
 import { fromMinorUnits, tryParsePositiveAmount } from '@/services/money'
-import { formatExchangeRateAsOf } from '@/services/exchangeRate'
+import { formatExchangeRateAsOf, getCachedRate } from '@/services/exchangeRate'
+import {
+  quoteCurrencyForBaseRate,
+  resolveAccountAmountForSave,
+} from '@/services/exchangeRate/moneyEntryFx'
 import {
   deleteMovementFlow,
   duplicateMoneyEntryFlow,
@@ -159,17 +163,6 @@ export function TransactionDetailScreen() {
     }
 
     const needsAccountAmount = currencyCode !== selectedAccount.currencyCode
-    let accountAmountMinor: number | null = null
-    if (needsAccountAmount) {
-      accountAmountMinor = tryParsePositiveAmount(
-        accountAmount,
-        currencyByCode[selectedAccount.currencyCode]?.decimalPlaces ?? 2,
-      )
-      if (accountAmountMinor == null) {
-        setError(t('errors.invalidAmount'))
-        return
-      }
-    }
 
     const currencyMap: Record<string, Pick<Currency, 'code' | 'decimalPlaces'>> = {}
     for (const currency of currencies) {
@@ -179,20 +172,48 @@ export function TransactionDetailScreen() {
       }
     }
 
-    const foreignForBase =
-      currencyCode !== settings.baseCurrency
-        ? currencyCode
-        : selectedAccount.currencyCode !== settings.baseCurrency
-          ? selectedAccount.currencyCode
-          : null
-    const rateTrimmed = fxRate.trim()
+    const foreignForBase = quoteCurrencyForBaseRate({
+      originalCurrencyCode: currencyCode,
+      accountCurrencyCode: selectedAccount.currencyCode,
+      baseCurrencyCode: settings.baseCurrency,
+    })
+    let rateTrimmed = fxRate.trim()
+    if (!rateTrimmed && foreignForBase) {
+      const cached = await getCachedRate(settings.baseCurrency, foreignForBase)
+      if (cached) rateTrimmed = cached.rate
+    }
+
+    const typedAccountAmount = needsAccountAmount
+      ? tryParsePositiveAmount(
+          accountAmount,
+          currencyByCode[selectedAccount.currencyCode]?.decimalPlaces ?? 2,
+        )
+      : null
+    const resolvedAccount = resolveAccountAmountForSave({
+      needsAccountAmount,
+      typedAccountAmountMinor: typedAccountAmount,
+      originalAmountMinor,
+      originalCurrencyCode: currencyCode,
+      accountCurrencyCode: selectedAccount.currencyCode,
+      baseCurrencyCode: settings.baseCurrency,
+      baseQuoteRate: foreignForBase && rateTrimmed ? rateTrimmed : null,
+      quoteCurrencyCode: foreignForBase,
+      currencies: currencyMap,
+    })
+    if (!resolvedAccount.ok) {
+      setError(t('errors.invalidAmount'))
+      return
+    }
+
+    const accountChanged = accountId !== transaction.accountId
     const amountUnchanged =
+      !accountChanged &&
       originalAmountMinor === transaction.originalAmountMinor &&
       currencyCode === transaction.originalCurrencyCode &&
       selectedAccount.currencyCode === transaction.accountCurrencyCode &&
-      (accountAmountMinor == null
+      (resolvedAccount.accountAmountMinor == null
         ? transaction.originalCurrencyCode === transaction.accountCurrencyCode
-        : accountAmountMinor === transaction.accountAmountMinor)
+        : resolvedAccount.accountAmountMinor === transaction.accountAmountMinor)
 
     setSaving(true)
     setError(null)
@@ -208,7 +229,7 @@ export function TransactionDetailScreen() {
       originalCurrencyCode: currencyCode,
       accountCurrencyCode: selectedAccount.currencyCode,
       baseCurrencyCode: settings.baseCurrency,
-      accountAmountMinor,
+      accountAmountMinor: resolvedAccount.accountAmountMinor,
       exchangeRate: rateTrimmed || transaction.exchangeRate,
       baseQuoteRate: foreignForBase && rateTrimmed ? rateTrimmed : null,
       quoteCurrencyCode: foreignForBase,
@@ -234,6 +255,7 @@ export function TransactionDetailScreen() {
     setMessage(null)
     setTransaction(result.transaction)
     applyTransactionToForm(result.transaction, currencies)
+    navigate('/transactions', { replace: true })
   }
 
   async function onDelete() {
@@ -412,13 +434,22 @@ export function TransactionDetailScreen() {
               <select
                 className="field__control"
                 value={accountId}
-                onChange={(event) => setAccountId(event.target.value)}
+                onChange={(event) => {
+                  const nextId = event.target.value
+                  setAccountId(nextId)
+                  const nextAccount = accountById.get(nextId)
+                  if (nextAccount) {
+                    // Excel-like: account currency drives the amount currency.
+                    setCurrencyCode(nextAccount.currencyCode)
+                    setAccountAmount('')
+                  }
+                }}
               >
                 {accounts
                   .filter((row) => row.archivedAt == null)
                   .map((account) => (
                     <option key={account.id} value={account.id}>
-                      {account.name}
+                      {account.name} ({account.currencyCode})
                     </option>
                   ))}
               </select>

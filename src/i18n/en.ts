@@ -62,6 +62,8 @@ export const en = {
     notes: 'Notes',
     accountAmount: 'Amount charged to account',
     accountAmountHint: 'This account uses a different currency. Enter the charged amount.',
+    accountAmountAutoHint:
+      'Filled from the exchange rate. Edit if your bank used a different amount.',
     suggested: 'Suggested',
     favorites: 'Favorites',
     recent: 'Recent',

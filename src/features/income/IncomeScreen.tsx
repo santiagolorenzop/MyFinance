@@ -10,8 +10,10 @@ import {
   getCachedRate,
 } from '@/services/exchangeRate'
 import {
+  previewAccountAmountMinor,
   previewBaseAmountMinor,
   quoteCurrencyForBaseRate,
+  resolveAccountAmountForSave,
 } from '@/services/exchangeRate/moneyEntryFx'
 import { suggestFromMemory } from '@/services/suggestion'
 import { saveIncomeFlow } from '@/services/income'
@@ -48,6 +50,7 @@ export function IncomeScreen() {
   const [date, setDate] = useState(todayFinancialDate())
   const [notes, setNotes] = useState('')
   const [accountAmount, setAccountAmount] = useState('')
+  const [accountAmountManual, setAccountAmountManual] = useState(false)
   const [fxRate, setFxRate] = useState('')
   const [fxRateAsOf, setFxRateAsOf] = useState<string | null>(null)
   const [fxRateSource, setFxRateSource] = useState<string | null>(null)
@@ -73,12 +76,15 @@ export function IncomeScreen() {
         setCurrencies(nextCurrencies)
         setTreatments(nextTreatments.filter((row) => row.isActive && !row.isTransferBehavior))
         setSuggestions(nextSuggestions)
-        setCurrencyCode(nextSettings?.baseCurrency ?? 'USD')
-        setAccountId(
+        const nextAccountId =
           nextSettings?.defaultAccountId ??
-            nextAccounts.find((row) => row.isDefault)?.id ??
-            nextAccounts[0]?.id ??
-            '',
+          nextAccounts.find((row) => row.isDefault)?.id ??
+          nextAccounts[0]?.id ??
+          ''
+        setAccountId(nextAccountId)
+        const defaultAccount = nextAccounts.find((row) => row.id === nextAccountId)
+        setCurrencyCode(
+          defaultAccount?.currencyCode ?? nextSettings?.baseCurrency ?? 'USD',
         )
         const excluded =
           nextTreatments.find((row) => row.behaviorKey === 'excluded')?.id ??
@@ -124,12 +130,67 @@ export function IncomeScreen() {
       if (cancelled || !cached) return
       setFxRate((current) => (fxRateSource === 'manual' && current ? current : cached.rate))
       setFxRateAsOf(cached.asOf)
-      setFxRateSource((source) => source === 'manual' ? source : 'cached')
+      setFxRateSource((source) => (source === 'manual' ? source : 'cached'))
     })()
     return () => {
       cancelled = true
     }
   }, [settings, quoteForFx, fxRateSource])
+
+  // Auto-fill account amount from FX when currencies differ and user hasn't overridden.
+  useEffect(() => {
+    if (!settings || !selectedAccount || !needsAccountAmount || accountAmountManual) return
+    const originalAmountMinor = tryParsePositiveAmount(
+      amount,
+      amountCurrency?.decimalPlaces ?? 2,
+    )
+    if (originalAmountMinor == null || !fxRate.trim()) return
+    const currencyMap: Record<string, Pick<Currency, 'code' | 'decimalPlaces'>> = {}
+    for (const currency of currencies) {
+      currencyMap[currency.code] = {
+        code: currency.code,
+        decimalPlaces: currency.decimalPlaces,
+      }
+    }
+    const derived = previewAccountAmountMinor({
+      originalAmountMinor,
+      originalCurrencyCode: currencyCode,
+      accountCurrencyCode: selectedAccount.currencyCode,
+      baseCurrencyCode: settings.baseCurrency,
+      baseQuoteRate: fxRate.trim(),
+      quoteCurrencyCode: quoteForFx,
+      currencies: currencyMap,
+    })
+    if (derived == null) return
+    setAccountAmount(
+      fromMinorUnits(
+        derived,
+        currencyByCode[selectedAccount.currencyCode]?.decimalPlaces ?? 2,
+      ),
+    )
+  }, [
+    settings,
+    selectedAccount,
+    needsAccountAmount,
+    accountAmountManual,
+    amount,
+    amountCurrency,
+    fxRate,
+    currencyCode,
+    quoteForFx,
+    currencies,
+    currencyByCode,
+  ])
+
+  function selectAccount(nextAccountId: string) {
+    setAccountId(nextAccountId)
+    const account = accounts.find((row) => row.id === nextAccountId)
+    if (account) {
+      setCurrencyCode(account.currencyCode)
+      setAccountAmount('')
+      setAccountAmountManual(false)
+    }
+  }
 
   async function onSave() {
     if (!settings || !selectedAccount || saving) return
@@ -140,19 +201,6 @@ export function IncomeScreen() {
     if (originalAmountMinor == null) {
       setError(t('errors.invalidAmount'))
       return
-    }
-
-    let accountAmountMinor: number | null = null
-    if (needsAccountAmount) {
-      const accountCurrency = currencyByCode[selectedAccount.currencyCode]
-      accountAmountMinor = tryParsePositiveAmount(
-        accountAmount,
-        accountCurrency?.decimalPlaces ?? 2,
-      )
-      if (accountAmountMinor == null) {
-        setError(t('errors.invalidAmount'))
-        return
-      }
     }
 
     const currencyMap: Record<string, Pick<Currency, 'code' | 'decimalPlaces'>> = {}
@@ -170,6 +218,28 @@ export function IncomeScreen() {
     })
     const baseQuoteRate = quote && fxRate.trim() ? fxRate.trim() : null
 
+    const typedAccountAmount = needsAccountAmount
+      ? tryParsePositiveAmount(
+          accountAmount,
+          currencyByCode[selectedAccount.currencyCode]?.decimalPlaces ?? 2,
+        )
+      : null
+    const resolvedAccount = resolveAccountAmountForSave({
+      needsAccountAmount,
+      typedAccountAmountMinor: typedAccountAmount,
+      originalAmountMinor,
+      originalCurrencyCode: currencyCode,
+      accountCurrencyCode: selectedAccount.currencyCode,
+      baseCurrencyCode: settings.baseCurrency,
+      baseQuoteRate,
+      quoteCurrencyCode: quote,
+      currencies: currencyMap,
+    })
+    if (!resolvedAccount.ok) {
+      setError(t('errors.invalidAmount'))
+      return
+    }
+
     const now = new Date().toISOString()
     setSaving(true)
     setError(null)
@@ -184,7 +254,7 @@ export function IncomeScreen() {
       originalCurrencyCode: currencyCode,
       accountCurrencyCode: selectedAccount.currencyCode,
       baseCurrencyCode: settings.baseCurrency,
-      accountAmountMinor,
+      accountAmountMinor: resolvedAccount.accountAmountMinor,
       baseQuoteRate,
       quoteCurrencyCode: quote,
       exchangeRateDate: fxRateAsOf
@@ -208,7 +278,7 @@ export function IncomeScreen() {
     setTitle(nextTitle)
     if (!settings?.enableSmartSuggestions) return
     const suggestion = suggestFromMemory(nextTitle, suggestions)
-    if (suggestion.accountId) setAccountId(suggestion.accountId)
+    if (suggestion.accountId) selectAccount(suggestion.accountId)
     if (suggestion.categoryId) setCategoryId(suggestion.categoryId)
     if (suggestion.treatmentId) setTreatmentId(suggestion.treatmentId)
   }
@@ -295,9 +365,11 @@ export function IncomeScreen() {
               className="list-row"
               style={{ width: '100%', textAlign: 'left' }}
               aria-pressed={accountId === account.id}
-              onClick={() => setAccountId(account.id)}
+              onClick={() => selectAccount(account.id)}
             >
-              <span>{account.name}</span>
+              <span>
+                {account.name} ({account.currencyCode})
+              </span>
               {accountId === account.id ? <span aria-hidden="true">✓</span> : null}
             </button>
           ))}
@@ -332,12 +404,16 @@ export function IncomeScreen() {
         {needsAccountAmount ? (
           <label className="field">
             <span className="field__label">{t('expense.accountAmount')}</span>
-            <span className="screen__note">{t('expense.accountAmountHint')}</span>
+            <span className="screen__note">{t('expense.accountAmountAutoHint')}</span>
             <input
               className="field__control"
               inputMode="decimal"
               value={accountAmount}
-              onChange={(event) => setAccountAmount(event.target.value)}
+              onChange={(event) => {
+                setAccountAmount(event.target.value)
+                setAccountAmountManual(true)
+              }}
+              placeholder={selectedAccount?.currencyCode}
             />
           </label>
         ) : null}

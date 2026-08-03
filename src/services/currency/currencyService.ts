@@ -194,6 +194,21 @@ export function resolveConversion(input: ConversionInput): ConversionResult {
     )
     exchangeRate = input.baseQuoteRate
     usedBaseQuoteRate = true
+  } else if (
+    input.baseQuoteRate &&
+    input.quoteCurrencyCode &&
+    input.originalCurrencyCode === input.quoteCurrencyCode &&
+    input.accountCurrencyCode === input.baseCurrencyCode
+  ) {
+    // Original in quote, account in base: derive account from market rate.
+    accountAmountMinor = convertQuoteToBase(
+      input.originalAmountMinor,
+      originalCurrency.decimalPlaces,
+      accountCurrency.decimalPlaces,
+      input.baseQuoteRate,
+    )
+    exchangeRate = input.baseQuoteRate
+    usedBaseQuoteRate = true
   } else {
     return {
       accountAmountMinor: 0,

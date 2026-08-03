@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import { AppShell } from '@/components/ui/AppShell'
 import { t } from '@/i18n'
 import { fromMinorUnits } from '@/services/money'
@@ -37,6 +37,7 @@ function matchLabel(field: string): string {
  * Type and date filters stay behind “More filters”.
  */
 export function MovementsScreen() {
+  const location = useLocation()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
@@ -49,32 +50,36 @@ export function MovementsScreen() {
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
   const [filters, setFilters] = useState<MovementFilters>(EMPTY_MOVEMENT_FILTERS)
 
+  const reload = useCallback(async () => {
+    const [
+      nextTx,
+      nextAccounts,
+      nextCategories,
+      nextFunds,
+      nextTreatments,
+      nextCurrencies,
+    ] = await Promise.all([
+      listAllTransactions(),
+      listAccounts(true),
+      listCategories(true),
+      listFunds(true),
+      listTreatments(),
+      listCurrencies(),
+    ])
+    setTransactions(nextTx)
+    setAccounts(nextAccounts)
+    setCategories(nextCategories)
+    setFunds(nextFunds)
+    setTreatments(nextTreatments)
+    setCurrencies(nextCurrencies)
+  }, [])
+
+  // Reload whenever this screen is shown (including after editing a movement).
   useEffect(() => {
     let cancelled = false
     void (async () => {
       try {
-        const [
-          nextTx,
-          nextAccounts,
-          nextCategories,
-          nextFunds,
-          nextTreatments,
-          nextCurrencies,
-        ] = await Promise.all([
-          listAllTransactions(),
-          listAccounts(true),
-          listCategories(true),
-          listFunds(true),
-          listTreatments(),
-          listCurrencies(),
-        ])
-        if (cancelled) return
-        setTransactions(nextTx)
-        setAccounts(nextAccounts)
-        setCategories(nextCategories)
-        setFunds(nextFunds)
-        setTreatments(nextTreatments)
-        setCurrencies(nextCurrencies)
+        await reload()
       } catch {
         if (!cancelled) setError(t('errors.generic'))
       } finally {
@@ -84,7 +89,7 @@ export function MovementsScreen() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [location.key, reload])
 
   const currencyByCode = useMemo(() => {
     const map: Record<string, Currency> = {}

@@ -71,6 +71,36 @@ describe('currencyService', () => {
     expect(result.usedBaseQuoteRate).toBe(true)
   })
 
+  it('derives COP account amount from USD original via baseQuoteRate', () => {
+    const result = resolveConversion({
+      originalAmountMinor: 10_000,
+      originalCurrencyCode: 'USD',
+      accountCurrencyCode: 'COP',
+      baseCurrencyCode: 'USD',
+      baseQuoteRate: '4050',
+      quoteCurrencyCode: 'COP',
+      currencies,
+    })
+    expect(result.status).toBe('ok')
+    expect(result.accountAmountMinor).toBe(405_000)
+    expect(result.baseCurrencyAmountMinor).toBe(10_000)
+  })
+
+  it('derives USD account amount from COP original via baseQuoteRate', () => {
+    const result = resolveConversion({
+      originalAmountMinor: 405_000,
+      originalCurrencyCode: 'COP',
+      accountCurrencyCode: 'USD',
+      baseCurrencyCode: 'USD',
+      baseQuoteRate: '4050',
+      quoteCurrencyCode: 'COP',
+      currencies,
+    })
+    expect(result.status).toBe('ok')
+    expect(result.accountAmountMinor).toBe(10_000)
+    expect(result.baseCurrencyAmountMinor).toBe(10_000)
+  })
+
   it('flags missing conversion instead of guessing', () => {
     const result = resolveConversion({
       originalAmountMinor: 1000,

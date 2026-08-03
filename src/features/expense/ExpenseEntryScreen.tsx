@@ -11,8 +11,10 @@ import {
   getCachedRate,
 } from '@/services/exchangeRate'
 import {
+  previewAccountAmountMinor,
   previewBaseAmountMinor,
   quoteCurrencyForBaseRate,
+  resolveAccountAmountForSave,
 } from '@/services/exchangeRate/moneyEntryFx'
 import { suggestFromMemory } from '@/services/suggestion'
 import { rankAccountsForPicker } from '@/services/account'
@@ -69,6 +71,7 @@ interface DraftState {
   date: string
   notes: string
   accountAmount: string
+  accountAmountManual: boolean
   fxRate: string
   fxRateAsOf: string | null
   fxRateSource: string | null
@@ -95,6 +98,7 @@ function emptyDraft(
     date: todayFinancialDate(),
     notes: '',
     accountAmount: '',
+    accountAmountManual: false,
     fxRate: '',
     fxRateAsOf: null,
     fxRateSource: null,
@@ -182,19 +186,21 @@ export function ExpenseEntryScreen() {
       try {
         const data = await reloadReferenceData()
         if (cancelled) return
-        const base = data.settings?.baseCurrency ?? 'USD'
         const defaultAccountId =
           data.settings?.defaultAccountId ??
           data.accounts.find((row) => row.isDefault)?.id ??
           data.accounts[0]?.id ??
           ''
+        const defaultAccount = data.accounts.find((row) => row.id === defaultAccountId)
+        const currencyCode =
+          defaultAccount?.currencyCode ?? data.settings?.baseCurrency ?? 'USD'
         const treatmentId =
           data.settings?.defaultTreatmentId ??
           data.treatments.find((row) => row.behaviorKey === 'monthly_budget')?.id ??
           ''
         setDraft(
           emptyDraft(
-            base,
+            currencyCode,
             defaultAccountId,
             treatmentId,
             data.settings?.defaultFundId ?? null,
@@ -269,6 +275,53 @@ export function ExpenseEntryScreen() {
     }
   }, [quoteForFx, settings])
 
+  // Auto-fill account amount from FX when currencies differ.
+  useEffect(() => {
+    if (!draft || !settings || !selectedAccount || !needsAccountAmount) return
+    if (draft.accountAmountManual) return
+    const originalAmountMinor = tryParsePositiveAmount(
+      draft.amount,
+      amountCurrency?.decimalPlaces ?? 2,
+    )
+    if (originalAmountMinor == null || !draft.fxRate.trim()) return
+    const currencyMap: Record<string, Pick<Currency, 'code' | 'decimalPlaces'>> = {}
+    for (const currency of currencies) {
+      currencyMap[currency.code] = {
+        code: currency.code,
+        decimalPlaces: currency.decimalPlaces,
+      }
+    }
+    const derived = previewAccountAmountMinor({
+      originalAmountMinor,
+      originalCurrencyCode: draft.currencyCode,
+      accountCurrencyCode: selectedAccount.currencyCode,
+      baseCurrencyCode: settings.baseCurrency,
+      baseQuoteRate: draft.fxRate.trim(),
+      quoteCurrencyCode: quoteForFx,
+      currencies: currencyMap,
+    })
+    if (derived == null) return
+    const next = fromMinorUnits(
+      derived,
+      currencyByCode[selectedAccount.currencyCode]?.decimalPlaces ?? 2,
+    )
+    if (draft.accountAmount === next) return
+    setDraft((current) =>
+      current
+        ? { ...current, accountAmount: next, accountAmountManual: false }
+        : current,
+    )
+  }, [
+    draft,
+    settings,
+    selectedAccount,
+    needsAccountAmount,
+    amountCurrency,
+    currencies,
+    currencyByCode,
+    quoteForFx,
+  ])
+
   const rankedAccounts = useMemo(() => {
     if (!settings) return []
     return rankAccountsForPicker({
@@ -312,15 +365,18 @@ export function ExpenseEntryScreen() {
   function applySuggestionsForTitle(title: string, current: DraftState): DraftState {
     if (!settings?.enableSmartSuggestions) return { ...current, title }
     const suggestion = suggestFromMemory(title, suggestions)
+    const nextAccountId = current.accountTouched
+      ? current.accountId
+      : (suggestion.accountId ?? current.accountId)
+    const nextAccount = accounts.find((row) => row.id === nextAccountId)
     return {
       ...current,
       title,
       categoryId: current.categoryTouched
         ? current.categoryId
         : (suggestion.categoryId ?? current.categoryId),
-      accountId: current.accountTouched
-        ? current.accountId
-        : (suggestion.accountId ?? current.accountId),
+      accountId: nextAccountId,
+      currencyCode: nextAccount?.currencyCode ?? current.currencyCode,
       fundId: suggestion.fundId ?? current.fundId,
       treatmentId: suggestion.treatmentId ?? current.treatmentId,
     }
@@ -339,16 +395,18 @@ export function ExpenseEntryScreen() {
     if (step === 'title') return draft.title.trim().length > 0
     if (step === 'account') return draft.accountId.length > 0
     if (step === 'confirm') {
-      if (needsAccountAmount) {
-        const accountCurrency = currencyByCode[selectedAccount!.currencyCode]
-        return (
-          tryParsePositiveAmount(
-            draft.accountAmount,
-            accountCurrency?.decimalPlaces ?? 2,
-          ) != null
-        )
+      if (!needsAccountAmount) return true
+      const accountCurrency = currencyByCode[selectedAccount!.currencyCode]
+      if (
+        tryParsePositiveAmount(
+          draft.accountAmount,
+          accountCurrency?.decimalPlaces ?? 2,
+        ) != null
+      ) {
+        return true
       }
-      return true
+      // Allow continue when FX rate can derive the account amount.
+      return Boolean(draft.fxRate.trim() && quoteForFx)
     }
     return false
   }
@@ -373,18 +431,22 @@ export function ExpenseEntryScreen() {
 
   function resetDraftKeepingDefaults() {
     if (!settings) return
-    const base = settings.baseCurrency
     const defaultAccountId =
       settings.defaultAccountId ??
       accounts.find((row) => row.isDefault)?.id ??
       accounts[0]?.id ??
       ''
+    const defaultAccount = accounts.find((row) => row.id === defaultAccountId)
+    const currencyCode =
+      defaultAccount?.currencyCode ?? settings.baseCurrency
     const treatmentId =
       settings.defaultTreatmentId ??
       treatments.find((row) => row.behaviorKey === 'monthly_budget')?.id ??
       draft?.treatmentId ??
       ''
-    setDraft(emptyDraft(base, defaultAccountId, treatmentId, settings.defaultFundId))
+    setDraft(
+      emptyDraft(currencyCode, defaultAccountId, treatmentId, settings.defaultFundId),
+    )
     setStep('amount')
     setShowMore(false)
     setShowCurrencyPicker(false)
@@ -497,19 +559,6 @@ export function ExpenseEntryScreen() {
       return
     }
 
-    let accountAmountMinor: number | null = null
-    if (needsAccountAmount) {
-      const accountCurrency = currencyByCode[selectedAccount.currencyCode]
-      accountAmountMinor = tryParsePositiveAmount(
-        draft.accountAmount,
-        accountCurrency?.decimalPlaces ?? 2,
-      )
-      if (accountAmountMinor == null) {
-        setError(t('errors.invalidAmount'))
-        return
-      }
-    }
-
     const currencyMap: Record<string, Pick<Currency, 'code' | 'decimalPlaces'>> = {}
     for (const currency of currencies) {
       currencyMap[currency.code] = {
@@ -524,6 +573,28 @@ export function ExpenseEntryScreen() {
       baseCurrencyCode: settings.baseCurrency,
     })
     const baseQuoteRate = quote && draft.fxRate.trim() ? draft.fxRate.trim() : null
+
+    const typedAccountAmount = needsAccountAmount
+      ? tryParsePositiveAmount(
+          draft.accountAmount,
+          currencyByCode[selectedAccount.currencyCode]?.decimalPlaces ?? 2,
+        )
+      : null
+    const resolvedAccount = resolveAccountAmountForSave({
+      needsAccountAmount,
+      typedAccountAmountMinor: typedAccountAmount,
+      originalAmountMinor,
+      originalCurrencyCode: draft.currencyCode,
+      accountCurrencyCode: selectedAccount.currencyCode,
+      baseCurrencyCode: settings.baseCurrency,
+      baseQuoteRate,
+      quoteCurrencyCode: quote,
+      currencies: currencyMap,
+    })
+    if (!resolvedAccount.ok) {
+      setError(t('errors.invalidAmount'))
+      return
+    }
 
     const now = new Date().toISOString()
     setSaving(true)
@@ -541,7 +612,7 @@ export function ExpenseEntryScreen() {
         originalCurrencyCode: draft.currencyCode,
         accountCurrencyCode: selectedAccount.currencyCode,
         baseCurrencyCode: settings.baseCurrency,
-        accountAmountMinor,
+        accountAmountMinor: resolvedAccount.accountAmountMinor,
         baseQuoteRate,
         quoteCurrencyCode: quote,
         exchangeRateDate: draft.fxRateAsOf
@@ -829,11 +900,19 @@ export function ExpenseEntryScreen() {
                 className="list-row"
                 style={{ width: '100%', textAlign: 'left' }}
                 onClick={() =>
-                  patchDraft({ accountId: account.id, accountTouched: true })
+                  patchDraft({
+                    accountId: account.id,
+                    accountTouched: true,
+                    currencyCode: account.currencyCode,
+                    accountAmount: '',
+                    accountAmountManual: false,
+                  })
                 }
                 aria-pressed={draft.accountId === account.id}
               >
-                <span>{account.name}</span>
+                <span>
+                  {account.name} ({account.currencyCode})
+                </span>
                 {draft.accountId === account.id ? <span aria-hidden="true">✓</span> : null}
               </button>
             ))}
@@ -874,12 +953,17 @@ export function ExpenseEntryScreen() {
             {needsAccountAmount ? (
               <label className="field">
                 <span className="field__label">{t('expense.accountAmount')}</span>
-                <span className="screen__note">{t('expense.accountAmountHint')}</span>
+                <span className="screen__note">{t('expense.accountAmountAutoHint')}</span>
                 <input
                   className="field__control"
                   inputMode="decimal"
                   value={draft.accountAmount}
-                  onChange={(event) => patchDraft({ accountAmount: event.target.value })}
+                  onChange={(event) =>
+                    patchDraft({
+                      accountAmount: event.target.value,
+                      accountAmountManual: true,
+                    })
+                  }
                   placeholder={selectedAccount?.currencyCode}
                 />
               </label>
